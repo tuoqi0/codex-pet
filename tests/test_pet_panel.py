@@ -685,6 +685,23 @@ class PanelTests(unittest.TestCase):
                        self.panel.new_button, self.panel.threads_button, self.panel.send_button):
             self.assertTrue(self.panel.rect().contains(widget.mapTo(self.panel, widget.rect().center())))
 
+    def test_small_selected_thread_controls_do_not_clip_horizontally(self):
+        self.panel.resize(480, 580)
+        self.panel.mode.setCurrentIndex(2)
+        self.panel.selected_thread = 'thread'
+        self.panel._show_permission()
+        self.panel.show()
+        QTest.qWait(30)
+        viewport = self.panel.options_scroll.viewport()
+        for widget in (self.panel.threads_button, self.panel.thread_refresh,
+                       self.panel.thread_follow, self.panel.permission):
+            self.panel.options_scroll.ensureWidgetVisible(widget)
+            QTest.qWait(20)
+            top_left = widget.mapTo(viewport, widget.rect().topLeft())
+            bottom_right = widget.mapTo(viewport, widget.rect().bottomRight())
+            self.assertTrue(viewport.rect().contains(top_left), widget.objectName())
+            self.assertTrue(viewport.rect().contains(bottom_right), widget.objectName())
+
     def test_models_update_per_mode_and_error_does_not_silently_pick_another(self):
         self.panel.model_cache = {}
         self.panel._refresh_models()

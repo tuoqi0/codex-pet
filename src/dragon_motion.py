@@ -48,12 +48,15 @@ def _source_point(x, y, phase):
     """Map an output point to its source; units x/y are padded-canvas pixels."""
     width, height = _ART_SIZE
     left, right, tail = _motion_weights(x, y)
-    wing_phase = math.sin(phase)
+    # Each wing follows its own delayed arc rather than shifting as a rigid
+    # strip. The cross-axis movement is intentionally small: the source art
+    # is flattened and large rotations would tear the overlap near the body.
+    left_phase = math.sin(phase)
+    right_phase = math.sin(phase - .45)
     tail_phase = math.sin(phase + .8)
-    # Gentle amplitudes and broad ramps keep each mesh cell oriented: stronger
-    # fields fold the flattened wing membrane and reveal transparent holes.
-    return (x + width * .045 * tail * tail_phase,
-            y + height * (.04 * left + .075 * right) * wing_phase
+    wing_x = width * .006 * (-left * left_phase + right * right_phase)
+    return (x + wing_x + width * .045 * tail * tail_phase,
+            y + height * (.04 * left * left_phase + .075 * right * right_phase)
             + height * .045 * tail * tail_phase)
 
 

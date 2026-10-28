@@ -136,6 +136,21 @@ class DragonMotionTests(unittest.TestCase):
         self.assertGreaterEqual(max(b[1] for b in right) - min(b[1] for b in right), 8)
         self.assertGreaterEqual(max(b[2] for b in tail) - min(b[2] for b in tail), 12)
 
+    def test_wings_and_tail_have_distinct_motion_phases(self):
+        # The left wing is at rest at the start of the cycle. The other
+        # wing and the tail should already be moving rather than mirroring it.
+        w, h = dragon_motion._ART_SIZE
+        mx, my = dragon_motion._MARGIN_X, dragon_motion._MARGIN_Y
+        left = (mx + w * .25, my + h * .24)
+        right = (mx + w * .9, my + h * .24)
+        tail = (mx + w * .95, my + h * .75)
+        self.assertEqual(dragon_motion._source_point(*left, 0), left)
+        self.assertNotEqual(dragon_motion._source_point(*right, 0), right)
+        self.assertNotEqual(dragon_motion._source_point(*tail, 0), tail)
+        # Wings also have a small horizontal sweep, not only vertical squash.
+        self.assertNotEqual(dragon_motion._source_point(*left, math.pi / 2)[0], left[0])
+        self.assertNotEqual(dragon_motion._source_point(*right, math.pi / 2)[0], right[0])
+
     def test_motion_extents_remain_continuous_at_default_size(self):
         # Include the last-to-first transition: a seamless 24-frame cycle.
         for area, axis in (((83, 23, 136, 76), 1),

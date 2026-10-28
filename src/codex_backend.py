@@ -227,7 +227,7 @@ class AppServer:
         self.mode = None
         threading.Thread(target=self._read, daemon=True).start()
         try:
-            self.request('initialize', {'clientInfo': {'name': 'codex_pet', 'title': 'Codex Pet', 'version': '2.15.0'}, 'capabilities': {'experimentalApi': True}})
+            self.request('initialize', {'clientInfo': {'name': 'codex_pet', 'title': 'Codex Pet', 'version': '2.16.0'}, 'capabilities': {'experimentalApi': True}})
             self.write({'method': 'initialized', 'params': {}})
         except Exception:
             self.close()
@@ -744,7 +744,8 @@ class Backend:
                 account = server.request('account/read', {'refreshToken': False}).get('account')
                 if not account or account.get('type') != 'chatgpt':
                     raise RuntimeError('Codex 未以 ChatGPT 账户登录；不会使用 API key。')
-                params = {'limit': 50, 'sourceKinds': ['cli', 'vscode', 'appServer']}
+                params = {'limit': 50, 'sourceKinds': ['cli', 'vscode', 'appServer'],
+                          'sortKey': 'updated_at'}
                 if cursor:
                     params['cursor'] = cursor
                 result = server.request('thread/list', params)

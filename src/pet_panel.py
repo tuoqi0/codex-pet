@@ -9,7 +9,7 @@ from PyQt5.QtCore import QObject, Qt, QTimer, QUrl, pyqtSignal
 from PyQt5.QtGui import QColor, QDesktopServices, QFontDatabase, QPainter, QPen, QPixmap, QTextCharFormat, QTextCursor, QTextDocument, QTextFormat, QTextOption
 from PyQt5.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QInputDialog,
-    QFrame, QLabel, QLineEdit, QListWidget, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QStackedWidget, QTabWidget, QTextEdit,
+    QFrame, QLabel, QLineEdit, QListWidget, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QStackedWidget, QTabWidget, QTextEdit,
     QVBoxLayout, QWidget,
 )
 
@@ -30,9 +30,9 @@ QDialog { background: #faf8fd; color: #403951; }
 QWidget { color: #403951; font-family: "Noto Sans CJK SC", "Noto Sans", sans-serif; font-size: 13px; }
 QFrame#hero { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #f2ebfb, stop:0.58 #f9f5fd, stop:1 #edf1fc); border: 1px solid #e6dcf1; border-radius: 16px; }
 QLabel#eyebrow { color: #987ab9; font-size: 10px; font-weight: 700; letter-spacing: 1px; }
-QLabel#heroTitle { color: #4c395e; font-size: 19px; font-weight: 700; }
+QLabel#heroTitle { color: #4c395e; font-size: 17px; font-weight: 700; }
 QLabel#heroSub { color: #80738e; font-size: 12px; }
-QLabel#avatar { background: #faf6ff; border: 2px solid #dfd1f0; border-radius: 29px; }
+QLabel#avatar { background: #faf6ff; border: 2px solid #dfd1f0; border-radius: 24px; }
 QTabWidget::pane { border: 0; background: transparent; }
 QTabBar::tab { color: #8d829a; padding: 8px 18px; margin-right: 8px; border-bottom: 2px solid transparent; font-weight: 600; }
 QTabBar::tab:selected { color: #715491; border-bottom: 2px solid #ac8cd0; }
@@ -42,7 +42,7 @@ QLabel#muted { color: #8b8196; font-size: 11px; }
 QLabel#sectionTitle { color: #50405f; font-size: 15px; font-weight: 700; }
 QLabel#notice { color: #7c7089; font-size: 11px; }
 QLabel#status { color: #8a7b99; padding: 4px 2px; font-size: 11px; }
-QComboBox, QPlainTextEdit { background: #f9f6fc; color: #473b55; border: 1px solid #e3d9ed; border-radius: 8px; padding: 8px; selection-background-color: #cbb5e5; }
+QComboBox, QPlainTextEdit { background: #f9f6fc; color: #473b55; border: 1px solid #e3d9ed; border-radius: 8px; padding: 6px 8px; selection-background-color: #cbb5e5; }
 QComboBox { padding-right: 26px; min-height: 20px; }
 QComboBox::drop-down { width: 23px; border: 0; }
 QComboBox QAbstractItemView { background: #ffffff; color: #51415e; selection-background-color: #e9dff4; border: 1px solid #e0d3ed; }
@@ -60,7 +60,7 @@ QListWidget#imageList { background: #f9f6fc; border: 1px solid #e3d9ed; border-r
 QListWidget#imageList::item:selected { background: #e4d7f1; color: #473b55; }
 QScrollArea#limitsScroll { background: transparent; border: 0; }
 QWidget#limitsContent { background: #faf8fd; }
-QWidget#messages { background: #fffdfd; }
+QWidget#messages { background: transparent; }
 QTextEdit#assistantBubble { color: #4c4056; background: #f3eef9; border: 1px solid #ebe2f3; border-radius: 12px; padding: 11px 13px; }
 QTextEdit#userBubble { color: #ffffff; background: #a88dcc; border: 1px solid #a88dcc; border-radius: 12px; padding: 11px 13px; }
 QLabel#bubbleName { color: #998ba5; font-size: 10px; font-weight: 600; }
@@ -440,11 +440,11 @@ class PetPanel(QDialog):
         hero = QFrame()
         hero.setObjectName('hero')
         row = QHBoxLayout(hero)
-        row.setContentsMargins(16, 8, 16, 8)
-        row.setSpacing(15)
+        row.setContentsMargins(14, 7, 14, 7)
+        row.setSpacing(12)
         avatar = QLabel()
         avatar.setObjectName('avatar')
-        avatar.setFixedSize(58, 58)
+        avatar.setFixedSize(48, 48)
         avatar.setAlignment(Qt.AlignCenter)
         directory = Path(__file__).resolve().parent
         image = directory / 'dragon-seated.png'
@@ -454,7 +454,7 @@ class PetPanel(QDialog):
         if not pixmap.isNull():
             side = int(pixmap.width() * .18)
             portrait = pixmap.copy(int(pixmap.width() * .485), int(pixmap.height() * .015), side, side)
-            avatar.setPixmap(portrait.scaled(52, 52, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            avatar.setPixmap(portrait.scaled(44, 44, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         row.addWidget(avatar)
         titles = QVBoxLayout()
         titles.setSpacing(1)
@@ -485,6 +485,7 @@ class PetPanel(QDialog):
         card_layout = QVBoxLayout(card)
         card_layout.setContentsMargins(12, 7, 12, 7)
         card_layout.setSpacing(4)
+        card_layout.setAlignment(Qt.AlignTop)
         row = QHBoxLayout()
         mode_label = QLabel('对话模式')
         mode_label.setObjectName('muted')
@@ -529,13 +530,15 @@ class PetPanel(QDialog):
         self.thread_refresh.setObjectName('compact')
         self.thread_refresh.setToolTip('只重新读取已选 Codex 对话；不发送消息或执行任务。')
         self.thread_refresh.clicked.connect(self._refresh_thread)
-        model_options.addWidget(self.thread_refresh)
         card_layout.addLayout(model_options)
+        history_row = QHBoxLayout()
         self.thread_follow = QCheckBox('自动跟随已选对话（约 30 秒，非即时）')
         self.thread_follow.setChecked(True)
         self.thread_follow.setToolTip('只在此面板显示且任务模式空闲时读取已选对话，可随时关闭。')
         self.thread_follow.toggled.connect(self._follow_toggled)
-        card_layout.addWidget(self.thread_follow)
+        history_row.addWidget(self.thread_follow, 1)
+        history_row.addWidget(self.thread_refresh)
+        card_layout.addLayout(history_row)
         self.notice = QLabel()
         self.notice.setObjectName('notice')
         self.notice.setWordWrap(True)
@@ -567,12 +570,14 @@ class PetPanel(QDialog):
         card_layout.addWidget(self.permission_notice)
         self.options_scroll = QScrollArea()
         self.options_scroll.setWidgetResizable(True)
+        self.options_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         self.options_scroll.setFrameShape(QFrame.NoFrame)
         self.options_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.options_scroll.setMaximumHeight(250)
         self.options_scroll.setMinimumHeight(120)
         self.options_scroll.setWidget(card)
         layout.addWidget(self.options_scroll)
+        self._schedule_options_height()
         self.transcripts = {mode: ChatTranscript() for mode in ('chat', 'plan', 'task')}
         self.transcript_stack = QStackedWidget()
         for transcript in self.transcripts.values():
@@ -772,9 +777,9 @@ class PetPanel(QDialog):
         notices = {
             'chat': '普通对话使用 ChatGPT 授权，无本地工具。图片加入上下文后，后续请求会再次传送，直至新对话。',
             'plan': '计划使用 ChatGPT 授权及只读工作目录；用量可能与 Codex 共享。',
-            'task': '任务使用已登录的 Codex ChatGPT 账户；可依设定执行工具与请求审批。',
+            'task': '使用已登录的 Codex 账户，可执行工具并请求审批。',
         }
-        self.notice.setText(notices[mode] + ' 各模式各自保留上下文；不会同步 ChatGPT 网站对话。')
+        self.notice.setText(notices[mode] + ' 各模式上下文独立，不同步 ChatGPT 网站对话。')
         image_notice = ('普通对话：发送的图片会随后续请求再次传送，直至新对话。'
                         if mode == 'chat' else
                         '计划／任务：图片由 Codex 线程管理；临时副本在执行结束后清理。')
@@ -869,6 +874,7 @@ class PetPanel(QDialog):
         self.thread_refresh.setVisible(visible)
         self.thread_refresh.setEnabled(visible and not self.busy and not self.thread_loading)
         self.thread_follow.setVisible(visible)
+        self._schedule_options_height()
 
     def _new_conversation(self):
         if self.busy or self.thread_loading:
@@ -1531,12 +1537,23 @@ class PetPanel(QDialog):
         self.remove_image.setEnabled(bool(self.images))
         self._update_failed_drafts()
 
+    def _schedule_options_height(self):
+        if hasattr(self, 'options_scroll'):
+            QTimer.singleShot(0, self._fit_options_height)
+
+    def _fit_options_height(self):
+        if sip.isdeleted(self):
+            return
+        card = self.options_scroll.widget()
+        card.layout().activate()
+        cap = 200 if self.height() < 700 else 250
+        self.options_scroll.setMaximumHeight(max(120, min(cap, card.sizeHint().height() + 2)))
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if hasattr(self, 'hero'):
             self.hero.setVisible(self.height() >= 700)
-        if hasattr(self, 'options_scroll'):
-            self.options_scroll.setMaximumHeight(200 if self.height() < 700 else 250)
+        self._schedule_options_height()
 
     def _show_limits(self, data):
         data = data if isinstance(data, dict) else {}

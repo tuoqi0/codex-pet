@@ -603,7 +603,15 @@ for line in sys.stdin:
         with mock.patch.object(backend, 'AppServer', Server), tempfile.TemporaryDirectory() as directory:
             b.codex_threads()
             self.assertTrue(ready.wait(2))
+            self.assertEqual(requests_seen[-1], ('thread/list', {
+                'limit': 50, 'sourceKinds': ['cli', 'vscode', 'appServer'],
+                'sortKey': 'updated_at'}))
             self.assertNotIn('thread/read', [method for method, _ in requests_seen])
+            ready.clear()
+            b.codex_threads('next')
+            self.assertTrue(ready.wait(2))
+            self.assertEqual(requests_seen[-1][1]['sortKey'], 'updated_at')
+            self.assertEqual(requests_seen[-1][1]['cursor'], 'next')
             ready.clear()
             b.codex_thread('old')
             self.assertTrue(ready.wait(2))
