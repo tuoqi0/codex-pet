@@ -219,13 +219,15 @@ class AppServer:
         self.counter = 0
         self.pending_approvals = {}
         self.file_change_patches = OrderedDict()
+        self.command_items = OrderedDict()
+        self.pending_command_snapshots = {}
         self.pending_patch_snapshots = {}
         self.event_lock = threading.RLock()
         self.completed_turns = {}
         self.mode = None
         threading.Thread(target=self._read, daemon=True).start()
         try:
-            self.request('initialize', {'clientInfo': {'name': 'codex_pet', 'title': 'Codex Pet', 'version': '2.13.0'}, 'capabilities': {'experimentalApi': True}})
+            self.request('initialize', {'clientInfo': {'name': 'codex_pet', 'title': 'Codex Pet', 'version': '2.14.0'}, 'capabilities': {'experimentalApi': True}})
             self.write({'method': 'initialized', 'params': {}})
         except Exception:
             self.close()
@@ -361,6 +363,13 @@ class AppServer:
                 else:
                     self.pending_approvals[request_id] = (method, params)
                     payload = {'id': request_id, 'method': method, 'params': params}
+                    if method == 'item/commandExecution/requestApproval':
+                        item = getattr(self, 'command_items', {}).get(self._patch_key(params))
+                        payload['command_item'] = dict(item) if item else None
+                        snapshots = getattr(self, 'pending_command_snapshots', None)
+                        if snapshots is None:
+                            snapshots = self.pending_command_snapshots = {}
+                        snapshots[request_id] = dict(item) if item else None
                     if method == 'item/fileChange/requestApproval':
                         key = self._patch_key(params)
                         payload['file_changes'] = getattr(self, 'file_change_patches', {}).get(key)
@@ -377,6 +386,10 @@ class AppServer:
             turn = params.get('turn', {})
             self.completed_turns[turn.get('id')] = turn
             thread_id, turn_id = params.get('threadId'), turn.get('id')
+            commands = getattr(self, 'command_items', {})
+            for key in list(commands):
+                if key[:2] == (thread_id, turn_id):
+                    del commands[key]
             patches = getattr(self, 'file_change_patches', {})
             for key in list(patches):
                 if key[:2] == (thread_id, turn_id):
@@ -401,6 +414,25 @@ class AppServer:
         elif method in ('item/started', 'item/completed'):
             item = params.get('item', {})
             kind = item.get('type', '')
+            if kind == 'commandExecution':
+                key = self._patch_key(params, item.get('id'))
+                commands = getattr(self, 'command_items', None)
+                if commands is None:
+                    commands = self.command_items = OrderedDict()
+                if key is not None and method == 'item/started':
+                    command = item.get('command')
+                    cwd = item.get('cwd')
+                    if (isinstance(command, str) and command and len(command) <= MAX_APPROVAL_PATCH_CHARS
+                            and isinstance(cwd, str) and cwd and len(cwd) <= MAX_APPROVAL_PATCH_CHARS):
+                        commands[key] = {'command': command, 'cwd': cwd}
+                        commands.move_to_end(key)
+                        while len(commands) > MAX_APPROVAL_PATCH_ITEMS:
+                            commands.popitem(last=False)
+                    else:
+                        # An invalid replacement must not leave an older command reviewable.
+                        commands.pop(key, None)
+                elif key is not None and method == 'item/completed':
+                    commands.pop(key, None)
             if kind == 'fileChange':
                 key = self._patch_key(params, item.get('id'))
                 if method == 'item/started':
@@ -445,6 +477,42 @@ class AppServer:
         if request_id not in self.pending_approvals:
             raise RuntimeError('审批请求已失效。')
         method, params = self.pending_approvals[request_id]
+        if method == 'item/commandExecution/requestApproval' and decision == 'accept':
+            snapshots = getattr(self, 'pending_command_snapshots', {})
+            snapshot = snapshots.get(request_id)
+            current = getattr(self, 'command_items', {}).get(self._patch_key(params))
+            if snapshot != current:
+                allowed = params.get('availableDecisions')
+                denial = next((d for d in ('decline', 'cancel')
+                               if allowed is None or isinstance(allowed, list) and d in allowed), None)
+                if denial is None:
+                    self.write({'id': request_id, 'error': {'code': -32601,
+                                'message': 'Command changed; no supported denial decision'}})
+                else:
+                    self.write({'id': request_id, 'result': {'decision': denial}})
+                del self.pending_approvals[request_id]
+                snapshots.pop(request_id, None)
+                self.emit('error', '审批期间命令内容发生变化，已拒绝；请重新检查。')
+                return
+            network = params.get('networkApprovalContext')
+            if params.get('kind', 'command') != 'command':
+                reviewable = False
+            elif network is not None:
+                reviewable = (isinstance(network, dict) and isinstance(network.get('host'), str)
+                              and bool(network['host']) and isinstance(network.get('protocol'), str)
+                              and bool(network['protocol']))
+            else:
+                item = getattr(self, 'command_items', {}).get(self._patch_key(params)) or {}
+                # A subcommand callback can share its parent item; its command
+                # must come from the approval itself, not the parent preview.
+                item_command = item.get('command') if not params.get('approvalId') else None
+                has_command = any(isinstance(value, str) and value
+                                  for value in (params.get('command'), item_command))
+                has_cwd = any(isinstance(value, str) and value
+                              for value in (params.get('cwd'), item.get('cwd')))
+                reviewable = has_command and has_cwd
+            if not reviewable:
+                raise ValueError('审批详情不完整，不能允许。')
         if method == 'item/fileChange/requestApproval' and decision == 'accept':
             snapshots = getattr(self, 'pending_patch_snapshots', {})
             snapshot = snapshots.get(request_id)
@@ -455,6 +523,8 @@ class AppServer:
                 snapshots.pop(request_id, None)
                 self.emit('error', '审批期间文件变更内容发生变化，已拒绝；请重新检查。')
                 return
+            if not snapshot:
+                raise ValueError('文件差异不可用，不能允许。')
         if method == 'item/tool/requestUserInput':
             if decision == 'cancel':
                 payload = {'id': request_id, 'error': {'code': -32800, 'message': 'User cancelled'}}
@@ -486,6 +556,7 @@ class AppServer:
         self.write(payload)
         del self.pending_approvals[request_id]
         getattr(self, 'pending_patch_snapshots', {}).pop(request_id, None)
+        getattr(self, 'pending_command_snapshots', {}).pop(request_id, None)
 
     def close(self):
         if self.process.poll() is None:

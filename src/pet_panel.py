@@ -1623,6 +1623,34 @@ class PetPanel(QDialog):
             self.status.setText('此审批的决定选项暂不支持，已拒绝处理。')
             return
         details = json.dumps(params, ensure_ascii=False, indent=2, default=str)
+        if method == 'item/commandExecution/requestApproval':
+            item = data.get('command_item')
+            network = params.get('networkApprovalContext')
+            has_command = isinstance(params.get('command'), str) and bool(params['command'])
+            has_cwd = isinstance(params.get('cwd'), str) and bool(params['cwd'])
+            if isinstance(item, dict):
+                details += '\n\n命令详情（来自同一会话、轮次和项目）：\n' + json.dumps(item, ensure_ascii=False, indent=2)
+                if not params.get('approvalId'):
+                    has_command = has_command or (isinstance(item.get('command'), str) and bool(item['command']))
+                has_cwd = has_cwd or (isinstance(item.get('cwd'), str) and bool(item['cwd']))
+            has_network = (isinstance(network, dict) and isinstance(network.get('host'), str)
+                           and bool(network['host']) and isinstance(network.get('protocol'), str)
+                           and bool(network['protocol']))
+            if params.get('kind', 'command') != 'command':
+                details += '\n\n此终端输入审批暂不支持，请拒绝本次请求，再在 Codex 中重新执行并检查。'
+                reviewable = False
+            elif network is not None:
+                details += '\n\n此请求涉及网络访问；请核对目标主机和协议。'
+                reviewable = has_network
+            else:
+                reviewable = has_command and has_cwd
+            if not reviewable:
+                details += '\n\n审批详情不完整，无法在此确认；请拒绝本次请求，再在 Codex 中重新执行并检查。'
+                choices = tuple(choice for choice in choices if choice != 'accept')
+                if not choices:
+                    self.backend.approve(data['id'], 'unsupported')
+                    self.status.setText('审批详情不完整，已拒绝处理。')
+                    return
         if method == 'item/fileChange/requestApproval':
             changes = data.get('file_changes')
             if changes:
@@ -1630,7 +1658,8 @@ class PetPanel(QDialog):
                 for change in changes:
                     details += '\n' + str(change['path']) + '  ' + json.dumps(change['kind'], ensure_ascii=False) + '\n' + change['diff'] + '\n'
             else:
-                details += '\n\n文件差异不可用：未收到匹配的完整变更，或变更超过显示限制。请先在 Codex 中检查。'
+                details += '\n\n文件差异不可用：未收到匹配的完整变更，或变更超过显示限制。请拒绝本次请求，再在 Codex 中重新执行并检查。'
+                choices = tuple(choice for choice in choices if choice != 'accept')
         dialog = QDialog(self)
         dialog.setWindowTitle('Codex 请求审批')
         dialog.resize(600, 400)

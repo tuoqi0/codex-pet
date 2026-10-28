@@ -114,6 +114,7 @@ class X11ShapeTests(unittest.TestCase):
     def tick(self):
         self.x.XSync(self.display, 0)
         self.app.processEvents()
+        QTest.qWait(20)
 
     def move(self, x, y):
         # XTest coordinates are physical pixels; Qt positions are logical.

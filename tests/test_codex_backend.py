@@ -975,6 +975,103 @@ for line in sys.stdin:
         server.handle({'id': 11, 'method': 'unknown/request', 'params': {}})
         self.assertIn('error', sent[-1])
 
+    def test_command_approval_uses_matching_started_item_and_rejects_unknown(self):
+        events, sent = [], []
+        server = object.__new__(backend.AppServer)
+        server.emit = lambda *args: events.append(args)
+        server.write = sent.append
+        server.pending_approvals = {}
+        server.mode = 'task'
+        ids = {'threadId': 'thread-a', 'turnId': 'turn-a', 'itemId': 'item-a'}
+        server.handle({'method': 'item/started', 'params': {
+            'threadId': ids['threadId'], 'turnId': ids['turnId'],
+            'item': {'id': ids['itemId'], 'type': 'commandExecution',
+                     'command': 'rm -i old-file', 'cwd': '/tmp/project', 'aggregatedOutput': 'private'}}})
+        server.handle({'id': 1, 'method': 'item/commandExecution/requestApproval', 'params': ids})
+        self.assertEqual(events[-1][1]['command_item'], {'command': 'rm -i old-file', 'cwd': '/tmp/project'})
+        server.approve(1, 'accept')
+        self.assertEqual(sent[-1]['result']['decision'], 'accept')
+        for key in ids:
+            mismatched = dict(ids, **{key: 'other'})
+            server.handle({'id': 2, 'method': 'item/commandExecution/requestApproval', 'params': mismatched})
+            self.assertIsNone(events[-1][1]['command_item'])
+            with self.assertRaisesRegex(ValueError, '审批详情不完整'):
+                server.approve(2, 'accept')
+            server.approve(2, 'decline')
+        server.handle({'id': 3, 'method': 'item/commandExecution/requestApproval',
+                       'params': {'networkApprovalContext': {'host': 'example.com', 'protocol': 'https'}}})
+        server.approve(3, 'accept')
+        self.assertEqual(sent[-1]['result']['decision'], 'accept')
+        server.handle({'id': 4, 'method': 'item/commandExecution/requestApproval',
+                       'params': {'command': 'curl', 'networkApprovalContext': {'host': 'example.com'}}})
+        with self.assertRaisesRegex(ValueError, '审批详情不完整'):
+            server.approve(4, 'accept')
+        server.handle({'id': 6, 'method': 'item/commandExecution/requestApproval',
+                       'params': dict(ids, approvalId='subcommand-id')})
+        with self.assertRaisesRegex(ValueError, '审批详情不完整'):
+            server.approve(6, 'accept')
+        server.handle({'id': 5, 'method': 'item/commandExecution/requestApproval',
+                       'params': dict(ids, kind='writeStdin', command='safe-looking')})
+        with self.assertRaisesRegex(ValueError, '审批详情不完整'):
+            server.approve(5, 'accept')
+        server.handle({'method': 'item/completed', 'params': {'threadId': ids['threadId'],
+                      'turnId': ids['turnId'], 'item': {'id': ids['itemId'], 'type': 'commandExecution'}}})
+        self.assertFalse(server.command_items)
+
+    def test_command_approval_checks_shown_snapshot_before_accepting(self):
+        events, sent = [], []
+        server = object.__new__(backend.AppServer)
+        server.emit = lambda *args: events.append(args)
+        server.write = sent.append
+        server.pending_approvals = {}
+        server.mode = 'task'
+        ids = {'threadId': 't', 'turnId': 'r', 'itemId': 'i'}
+        def started(command='echo first', cwd='/tmp'):
+            server.handle({'method': 'item/started', 'params': {
+                'threadId': 't', 'turnId': 'r', 'item': {'id': 'i', 'type': 'commandExecution',
+                                                            'command': command, 'cwd': cwd}}})
+        def approval(ident, **extra):
+            server.handle({'id': ident, 'method': 'item/commandExecution/requestApproval',
+                           'params': dict(ids, **extra)})
+        started()
+        approval(1)
+        started('echo changed')
+        server.approve(1, 'accept')
+        self.assertEqual(sent[-1], {'id': 1, 'result': {'decision': 'decline'}})
+        self.assertNotIn(1, server.pending_approvals)
+        self.assertNotIn(1, server.pending_command_snapshots)
+        self.assertIn('命令内容发生变化', events[-1][1])
+        started()
+        approval(2, availableDecisions=['accept', 'cancel'])
+        started(None)
+        self.assertNotIn(('t', 'r', 'i'), server.command_items)
+        server.approve(2, 'accept')
+        self.assertEqual(sent[-1]['result']['decision'], 'cancel')
+        started()
+        approval(3, availableDecisions=['accept'])
+        started('x' * (backend.MAX_APPROVAL_PATCH_CHARS + 1))
+        server.approve(3, 'accept')
+        self.assertIn('error', sent[-1])
+        self.assertNotIn(3, server.pending_approvals)
+        started()
+        approval(4)
+        server.handle({'method': 'item/completed', 'params': {'threadId': 't', 'turnId': 'r',
+                       'item': {'id': 'i', 'type': 'commandExecution'}}})
+        server.approve(4, 'accept')
+        self.assertEqual(sent[-1]['result']['decision'], 'decline')
+        started()
+        approval(5)
+        # A repeated identical item remains safe to accept.
+        started()
+        server.approve(5, 'accept')
+        self.assertEqual(sent[-1]['result']['decision'], 'accept')
+        started()
+        started(cwd=None)
+        self.assertNotIn(('t', 'r', 'i'), server.command_items)
+        started()
+        started(cwd='x' * (backend.MAX_APPROVAL_PATCH_CHARS + 1))
+        self.assertNotIn(('t', 'r', 'i'), server.command_items)
+
     def test_command_approval_accepts_only_server_offered_decisions(self):
         sent = []
         server = object.__new__(backend.AppServer)
@@ -1047,6 +1144,33 @@ for line in sys.stdin:
         self.assertNotIn(('thread-a', 'turn-a', '0'), server.file_change_patches)
         server.handle({'method': 'turn/completed', 'params': {'threadId': 'thread-a', 'turn': {'id': 'turn-a'}}})
         self.assertFalse(server.file_change_patches)
+
+    def test_file_approval_rejects_accept_without_full_diff(self):
+        events, sent = [], []
+        server = object.__new__(backend.AppServer)
+        server.emit = lambda *args: events.append(args)
+        server.write = sent.append
+        server.pending_approvals = {}
+        server.mode = 'task'
+        ids = {'threadId': 't', 'turnId': 'r', 'itemId': 'i'}
+        server.handle({'id': 1, 'method': 'item/fileChange/requestApproval', 'params': ids})
+        self.assertIsNone(events[-1][1]['file_changes'])
+        with self.assertRaisesRegex(ValueError, '文件差异不可用'):
+            server.approve(1, 'accept')
+        self.assertEqual(sent, [])
+        server.approve(1, 'decline')
+        self.assertEqual(sent[-1]['result']['decision'], 'decline')
+        server._remember_patch(('t', 'r', 'i'), [{'path': 'a', 'kind': {'type': 'update'}, 'diff': '+x'}])
+        server.handle({'id': 2, 'method': 'item/fileChange/requestApproval', 'params': ids})
+        server.approve(2, 'accept')
+        self.assertEqual(sent[-1]['result']['decision'], 'accept')
+        server._remember_patch(('t', 'r', 'i'), [{'path': 'a', 'kind': {'type': 'update'},
+                                                 'diff': 'x' * (backend.MAX_APPROVAL_PATCH_CHARS + 1)}])
+        server.handle({'id': 3, 'method': 'item/fileChange/requestApproval', 'params': ids})
+        with self.assertRaisesRegex(ValueError, '文件差异不可用'):
+            server.approve(3, 'accept')
+        server.approve(3, 'cancel')
+        self.assertEqual(sent[-1]['result']['decision'], 'cancel')
 
     def test_progress_keeps_plan_and_tool_lifecycle_without_private_outputs(self):
         events = []

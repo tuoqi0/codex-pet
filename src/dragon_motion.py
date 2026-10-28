@@ -6,6 +6,7 @@ parts hidden behind them.  The small, smoothly varying field avoids moving the
 face and knees and leaves a transparent margin for the tail's motion.
 """
 import math
+from functools import lru_cache
 
 from PIL import Image
 from PyQt5.QtGui import QImage, QPixmap
@@ -30,8 +31,9 @@ def _band(start, rise, fall, end, value):
     return _smoothstep(start, rise, value) * (1.0 - _smoothstep(fall, end, value))
 
 
-def _source_point(x, y, phase):
-    """Map an output point to its source; units x/y are padded-canvas pixels."""
+@lru_cache(maxsize=4096)
+def _motion_weights(x, y):
+    """Cache the position-only weights shared by every frame and pose."""
     width, height = _ART_SIZE
     nx, ny = (x - _MARGIN_X) / width, (y - _MARGIN_Y) / height
     left = _band(.10, .18, .30, .39, ny) * (1.0 - _smoothstep(.36, .49, nx))
@@ -39,6 +41,13 @@ def _source_point(x, y, phase):
     # the mesh; the left wing remains limited by the adjacent knee.
     right = _band(-.10, .23, .35, .56, ny) * _smoothstep(.69, .82, nx)
     tail = _band(.38, .68, 1.00, 1.30, ny) * _smoothstep(.68, .86, nx)
+    return left, right, tail
+
+
+def _source_point(x, y, phase):
+    """Map an output point to its source; units x/y are padded-canvas pixels."""
+    width, height = _ART_SIZE
+    left, right, tail = _motion_weights(x, y)
     wing_phase = math.sin(phase)
     tail_phase = math.sin(phase + .8)
     # Gentle amplitudes and broad ramps keep each mesh cell oriented: stronger
@@ -76,10 +85,13 @@ def motion_frames(path):
     for index in range(_FRAME_COUNT):
         phase = 2 * math.pi * index / _FRAME_COUNT
         mesh = []
-        for x0, x1 in zip(xs, xs[1:]):
-            for y0, y1 in zip(ys, ys[1:]):
-                quad = (*_source_point(x0, y0, phase), *_source_point(x0, y1, phase),
-                        *_source_point(x1, y1, phase), *_source_point(x1, y0, phase))
+        # Adjacent cells share corners. Evaluate each vertex once per frame
+        # instead of recalculating each corner for every neighbouring cell.
+        points = [[_source_point(x, y, phase) for y in ys] for x in xs]
+        for xi, (x0, x1) in enumerate(zip(xs, xs[1:])):
+            for yi, (y0, y1) in enumerate(zip(ys, ys[1:])):
+                quad = (*points[xi][yi], *points[xi][yi + 1],
+                        *points[xi + 1][yi + 1], *points[xi + 1][yi])
                 mesh.append(((x0, y0, x1, y1), quad))
         warped = original.transform(original.size, Image.Transform.MESH, mesh,
                                     resample=Image.Resampling.BICUBIC)

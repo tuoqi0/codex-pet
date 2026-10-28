@@ -94,10 +94,44 @@ class PanelTests(unittest.TestCase):
         self.panel._approval({'id': 2, 'method': 'item/commandExecution/requestApproval',
                               'params': {'availableDecisions': [{'applyNetworkPolicyAmendment': {}}]}})
         self.assertEqual(self.panel.backend.calls[-1], ('approve', 2, 'unsupported'))
-        QTimer.singleShot(0, lambda: QApplication.activeModalWidget().reject())
         self.panel._approval({'id': 3, 'method': 'item/commandExecution/requestApproval',
                               'params': {'availableDecisions': ['accept']}})
         self.assertEqual(self.panel.backend.calls[-1], ('approve', 3, 'unsupported'))
+
+    def test_command_approval_renders_started_item_and_disables_blind_accept(self):
+        from PyQt5.QtWidgets import QPlainTextEdit
+        observed = []
+        def inspect():
+            dialog = QApplication.activeModalWidget()
+            observed.append((dialog.findChild(QPlainTextEdit).toPlainText(),
+                             [button.text() for button in dialog.findChildren(QPushButton)]))
+            dialog.reject()
+        QTimer.singleShot(0, inspect)
+        self.panel._approval({'id': 11, 'method': 'item/commandExecution/requestApproval',
+                              'params': {}, 'command_item': {'command': 'echo hello', 'cwd': '/tmp/project'}})
+        self.assertIn('echo hello', observed[-1][0])
+        self.assertIn('/tmp/project', observed[-1][0])
+        self.assertIn('允许', observed[-1][1])
+        QTimer.singleShot(0, inspect)
+        self.panel._approval({'id': 12, 'method': 'item/commandExecution/requestApproval', 'params': {}})
+        self.assertIn('审批详情不完整', observed[-1][0])
+        self.assertNotIn('允许', observed[-1][1])
+        QTimer.singleShot(0, inspect)
+        self.panel._approval({'id': 13, 'method': 'item/commandExecution/requestApproval',
+                              'params': {'networkApprovalContext': {'host': 'example.com', 'protocol': 'https'}}})
+        self.assertIn('example.com', observed[-1][0])
+        self.assertIn('允许', observed[-1][1])
+        QTimer.singleShot(0, inspect)
+        self.panel._approval({'id': 14, 'method': 'item/commandExecution/requestApproval',
+                              'params': {'kind': 'writeStdin', 'command': 'harmless'},
+                              'command_item': {'command': 'shell', 'cwd': '/tmp/project'}})
+        self.assertNotIn('允许', observed[-1][1])
+        self.assertIn('终端输入审批暂不支持', observed[-1][0])
+        QTimer.singleShot(0, inspect)
+        self.panel._approval({'id': 15, 'method': 'item/commandExecution/requestApproval',
+                              'params': {'approvalId': 'subcommand-id'},
+                              'command_item': {'command': 'shell', 'cwd': '/tmp/project'}})
+        self.assertNotIn('允许', observed[-1][1])
 
     def test_additional_permission_approval_does_not_offer_unimplemented_stop(self):
         observed = []
@@ -153,18 +187,22 @@ class PanelTests(unittest.TestCase):
         observed = []
         def reject():
             dialog = QApplication.activeModalWidget()
-            observed.append(dialog.findChild(QPlainTextEdit).toPlainText())
+            observed.append((dialog.findChild(QPlainTextEdit).toPlainText(),
+                             [button.text() for button in dialog.findChildren(QPushButton)]))
             dialog.reject()
         changes = [{'path': 'app.py', 'kind': {'type': 'update'}, 'diff': '-old\n+new'}]
         QTimer.singleShot(0, reject)
         self.panel._approval({'id': 10, 'method': 'item/fileChange/requestApproval',
                               'params': {'threadId': 't', 'turnId': 'r', 'itemId': 'i'}, 'file_changes': changes})
-        self.assertIn('app.py', observed[-1])
-        self.assertIn('-old\n+new', observed[-1])
+        self.assertIn('app.py', observed[-1][0])
+        self.assertIn('-old\n+new', observed[-1][0])
+        self.assertIn('允许', observed[-1][1])
         self.assertEqual(self.panel.backend.calls[-1], ('approve', 10, 'decline'))
         QTimer.singleShot(0, reject)
         self.panel._approval({'id': 11, 'method': 'item/fileChange/requestApproval', 'params': {}})
-        self.assertIn('文件差异不可用', observed[-1])
+        self.assertIn('文件差异不可用', observed[-1][0])
+        self.assertIn('拒绝本次请求，再在 Codex 中重新执行', observed[-1][0])
+        self.assertNotIn('允许', observed[-1][1])
         self.assertEqual(self.panel.backend.calls[-1], ('approve', 11, 'decline'))
 
     def test_switching_modes_cancels_deferred_old_history(self):
