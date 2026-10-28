@@ -211,6 +211,16 @@ def discover_codex(home=None):
     return max(candidates)[1] if candidates else None
 
 
+def _confirm_handoff_turn(server, turn_id):
+    server.handoff_turn_id = turn_id
+    pending = getattr(server, 'handoff_pending', None)
+    if getattr(server, 'handoff_overflow', False):
+        server.emit('handoff_unavailable', {'request_id': server.handoff_request_id})
+    elif pending and turn_id in pending:
+        server.emit('handoff_reply', pending[turn_id])
+    server.handoff_pending = None
+
+
 class AppServer:
     def __init__(self, emit, token=None, executable=None, stop_event=None, process_factory=None):
         self.emit = emit
@@ -269,7 +279,7 @@ class AppServer:
         self.mode = None
         threading.Thread(target=self._read, daemon=True).start()
         try:
-            self.request('initialize', {'clientInfo': {'name': 'codex_pet', 'title': 'Codex Pet', 'version': '2.26.0'}, 'capabilities': {'experimentalApi': True}})
+            self.request('initialize', {'clientInfo': {'name': 'codex_pet', 'title': 'Codex Pet', 'version': '2.27.0'}, 'capabilities': {'experimentalApi': True}})
             self.write({'method': 'initialized', 'params': {}})
         except Exception:
             self.close()
@@ -472,6 +482,38 @@ class AppServer:
                 self._stdin_binary_verified = False
         return self._stdin_binary_verified
 
+    def _handoff_message(self, params, item):
+        """Buffer pre-response items until the new turn ID is known."""
+        request_id = getattr(self, 'handoff_request_id', None)
+        turn_id = params.get('turnId')
+        text, phase = item.get('text'), item.get('phase')
+        if (not request_id or params.get('threadId') != getattr(self, 'handoff_thread_id', None)
+                or not isinstance(turn_id, str) or not turn_id or not isinstance(text, str)
+                or not text.strip() or phase not in ('final_answer', None)):
+            return
+        marker = '【前文已截断】\n'
+        if len(text) > 8000:
+            text = marker + text[-(8000 - len(marker)):]
+        data = {'text': text, 'phase': phase, 'request_id': request_id}
+        if getattr(self, 'handoff_overflow', False):
+            return
+        current_turn = getattr(self, 'handoff_turn_id', None)
+        if current_turn is not None:
+            if turn_id == current_turn:
+                self.emit('handoff_reply', data)
+            return
+        pending = getattr(self, 'handoff_pending', None)
+        if pending is None or getattr(self, 'handoff_overflow', False):
+            return
+        previous = pending.get(turn_id)
+        if previous and previous['phase'] == 'final_answer' and phase is None:
+            return
+        if turn_id not in pending and len(pending) >= 64:
+            pending.clear()
+            self.handoff_overflow = True
+            return
+        pending[turn_id] = data
+
     def handle(self, event):
         lock = getattr(self, 'event_lock', None)
         if lock is None:  # Isolated unit test instances do not start a server.
@@ -609,6 +651,8 @@ class AppServer:
                     self._remember_patch(key, item.get('changes'))
                 else:
                     getattr(self, 'file_change_patches', {}).pop(key, None)
+            if kind == 'agentMessage' and method == 'item/completed':
+                self._handoff_message(params, item)
             if kind == 'plan' and method == 'item/completed':
                 self.emit('progress', {'kind': 'plan_final', 'item_id': item.get('id'),
                                        'text': item.get('text', '')})
@@ -1135,6 +1179,19 @@ class Backend:
         self.history = inputs + [{'role': 'assistant', 'content': ''.join(answer)}]
         self.history_image_bytes += sum(len(data) for _, _, data in images)
 
+    @staticmethod
+    def _resume_thread(server, params):
+        try:
+            return server.request('thread/resume', params)
+        except RpcError as exc:
+            # A second app-server can read an open session but cannot write it
+            # until the first writer closes. Match only the observed error for
+            # the selected thread; leave all unrelated RPC failures unchanged.
+            thread_id = params['threadId']
+            if exc.code == -32600 and str(exc) == f'thread {thread_id} already has an active writer':
+                raise RuntimeError('该 Codex 对话正被其他客户端占用。请关闭占用此对话的客户端后重试；草稿会保留。') from exc
+            raise
+
     def _agent(self, mode, text, cwd, model=None, effort=None, thread_id=None, task_sandbox=None, images=(),
                request_id=None):
         if thread_id and task_sandbox not in ('read-only', 'workspace-write'):
@@ -1199,7 +1256,7 @@ class Backend:
                 if effort is None and not selected.get('reasoningEffort') and not own_thread:
                     raise RuntimeError('历史对话未提供原推理强度，无法确认是否保留；请明确选择推理强度。')
                 params['sandbox'] = task_sandbox
-                started = server.request('thread/resume', {'threadId': thread_id, **params})
+                started = self._resume_thread(server, {'threadId': thread_id, **params})
                 expected_sandbox = {'read-only': 'readOnly', 'workspace-write': 'workspaceWrite'}[task_sandbox]
                 if (started.get('sandbox') or {}).get('type') != expected_sandbox or started.get('approvalPolicy') != 'on-request':
                     raise RuntimeError('Codex 未确认所选沙箱和审批策略；未启动任务。')
@@ -1210,12 +1267,14 @@ class Backend:
                     raise RuntimeError('Codex 恢复的推理强度与历史不一致；请明确选择推理强度。')
                 self.threads[key] = started['thread']['id']
             elif key in self.threads:
-                started = server.request('thread/resume', {'threadId': self.threads[key], **params})
+                started = self._resume_thread(server, {'threadId': self.threads[key], **params})
             else:
                 started = server.request('thread/start', params)
                 self.threads[key] = started['thread']['id']
                 self.created_threads[key] = started['thread']['id']
             thread = started['thread']
+            server.handoff_request_id = request_id
+            server.handoff_thread_id = thread['id']
             self.emit('thread', {'mode': mode, 'thread': thread, 'request_id': request_id})
             if images and mode == 'task':
                 selected_model = model or started.get('model')
@@ -1256,8 +1315,12 @@ class Backend:
                 start['approvalPolicy'] = 'never'
             if self.cancelled.is_set():
                 raise CancelledBeforeTurn()
+            server.handoff_pending = {}
+            server.handoff_overflow = False
+            server.handoff_turn_id = None
             try:
                 turn = server.request('turn/start', start)['turn']
+                _confirm_handoff_turn(server, turn['id'])
             except TurnStateUnknown:
                 raise
             except RuntimeError as exc:

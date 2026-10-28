@@ -181,6 +181,24 @@ class PanelTests(unittest.TestCase):
         self.assertEqual(set(observed), {'允许', '拒绝'})
         self.assertEqual(self.panel.backend.calls[-1], ('approve', 4, 'decline'))
 
+    def test_selected_thread_writer_conflict_restores_task_draft(self):
+        self.panel.mode.setCurrentIndex(2)
+        self.panel.cwd = '/tmp'
+        self.panel.selected_thread = 'chosen'
+        self.panel.permission.setCurrentIndex(self.panel.permission.findData('read-only'))
+        self.panel._show_models('task')
+        self.panel.prompt.setPlainText('待继续的任务')
+        self.panel.images = ['/tmp/draft.png']
+        self.panel._send()
+        self.assertTrue(self.panel.busy)
+        self.panel.bridge.received.emit('error', '该 Codex 对话正被其他客户端占用。请关闭占用此对话的客户端后重试；草稿会保留。')
+        self.panel.bridge.received.emit('done', {'mode': 'task', 'status': 'failed'})
+        self.assertEqual(self.panel.prompt.toPlainText(), '待继续的任务')
+        self.assertEqual(self.panel.images, ['/tmp/draft.png'])
+        self.assertIn('其他客户端占用', self.panel.status.text())
+        self.assertEqual(self.panel.selected_thread, 'chosen')
+        self.assertFalse(self.panel.busy)
+
     def test_synchronous_send_rejection_restores_draft_and_controls(self):
         self.panel.prompt.setPlainText('  原始草稿  ')
         self.panel.images = ['/tmp/example.png']

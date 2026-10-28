@@ -775,6 +775,25 @@ for line in sys.stdin:
             with self.assertRaisesRegex(RuntimeError, '历史对话未提供原推理强度'):
                 b._agent('task', 'external', directory, model='m', thread_id='new', task_sandbox='read-only')
 
+    def test_resume_reports_active_writer_without_masking_other_errors(self):
+        class Server:
+            def __init__(self, error): self.error = error
+            def request(self, method, params):
+                self.assert_method = method
+                raise backend.RpcError(self.error)
+        params = {'threadId': 'chosen'}
+        conflict = Server({'code': -32600, 'message': 'thread chosen already has an active writer'})
+        with self.assertRaisesRegex(RuntimeError, '其他客户端占用.*草稿会保留'):
+            backend.Backend._resume_thread(conflict, params)
+        self.assertEqual(conflict.assert_method, 'thread/resume')
+        for error in ({'code': -32601, 'message': 'thread chosen already has an active writer'},
+                      {'code': -32600, 'message': 'thread other already has an active writer'},
+                      {'code': -32600, 'message': 'unrelated failure'}):
+            with self.subTest(error=error), self.assertRaises(backend.RpcError) as caught:
+                backend.Backend._resume_thread(Server(error), params)
+            self.assertEqual(str(caught.exception), error['message'])
+            self.assertEqual(caught.exception.code, error['code'])
+
     def test_history_resume_requires_explicit_permission_and_confirmation(self):
         calls = []
         class Server:
