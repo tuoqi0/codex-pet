@@ -11,6 +11,7 @@ import threading
 import time
 import unittest
 from unittest import mock
+from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 import codex_backend as backend
@@ -31,6 +32,96 @@ class Response:
 
 
 class BackendTests(unittest.TestCase):
+    @staticmethod
+    def image_bytes():
+        data = io.BytesIO()
+        Image.new('RGB', (8, 8), (220, 30, 40)).save(data, 'PNG')
+        return data.getvalue()
+
+    def test_images_validate_user_selected_files_and_limits(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'red.png'
+            path.write_bytes(self.image_bytes())
+            loaded = backend.load_images([path])
+            self.assertEqual(loaded[0][:2], ('image/png', '.png'))
+            self.assertEqual(loaded[0][2], path.read_bytes())
+            with self.assertRaisesRegex(ValueError, '最多'):
+                backend.load_images([path] * 5)
+            with mock.patch.object(backend, 'MAX_IMAGE_BYTES', 10):
+                with self.assertRaisesRegex(ValueError, '10 MiB'):
+                    backend.load_images([path])
+            with mock.patch.object(backend, 'MAX_IMAGE_TOTAL_BYTES', len(loaded[0][2]) + 1):
+                with self.assertRaisesRegex(ValueError, '总大小'):
+                    backend.load_images([path, path])
+            invalid = Path(directory) / 'bad.png'
+            invalid.write_bytes(b'not a valid picture')
+            with self.assertRaisesRegex(ValueError, '图片无效'):
+                backend.load_images([invalid])
+            animated = Path(directory) / 'animated.gif'
+            first = Image.new('RGB', (2, 2), 'red')
+            first.save(animated, save_all=True, append_images=[Image.new('RGB', (2, 2), 'blue')], duration=10)
+            with self.assertRaisesRegex(ValueError, '动态图'):
+                backend.load_images([animated])
+
+    def test_chat_image_payload_history_and_model_rejection(self):
+        b = backend.Backend(lambda *_: None, auth=FakeAuth())
+        data = self.image_bytes()
+        images = [('image/png', '.png', data)]
+        catalog = Response({'models': [{'slug': 'vision', 'visibility': 'list', 'input_modalities': ['text', 'image']}]})
+        stream = Response(lines=['data: ' + json.dumps({'type': 'response.completed'})])
+        with mock.patch.object(backend.requests, 'get', return_value=catalog), mock.patch.object(backend.requests, 'post', return_value=stream) as post:
+            b._chat('what color?', 'vision', images)
+            content = post.call_args.kwargs['json']['input'][0]['content']
+            self.assertEqual(content[0], {'type': 'input_text', 'text': 'what color?'})
+            self.assertTrue(content[1]['image_url'].startswith('data:image/png;base64,'))
+            self.assertEqual(b.history_image_bytes, len(data))
+            with mock.patch.object(backend, 'MAX_CHAT_IMAGE_BYTES', len(data)):
+                with self.assertRaisesRegex(RuntimeError, '新对话'):
+                    b._chat('again', 'vision', images)
+        b.new_thread('chat', None)
+        self.assertEqual(b.history_image_bytes, 0)
+        text_only = Response({'models': [{'slug': 'text', 'visibility': 'list', 'input_modalities': ['text']}]})
+        with mock.patch.object(backend.requests, 'get', return_value=text_only), mock.patch.object(backend.requests, 'post') as post:
+            with self.assertRaisesRegex(RuntimeError, '不支持图片'):
+                b._chat('what color?', 'text', images)
+            post.assert_not_called()
+
+    def test_agent_images_are_private_snapshots_and_removed_on_success_and_failure(self):
+        image_data = self.image_bytes()
+        class Server:
+            fail = False
+            last = None
+            def __init__(self, *args, **kwargs):
+                self.completed_turns = {}
+                self.snapshot = None
+                Server.last = self
+            def request(self, method, params):
+                if method == 'account/read': return {'account': {'type': 'chatgpt'}}
+                if method in ('thread/start', 'thread/resume'): return {'thread': {'id': 't'}, 'model': 'm'}
+                if method == 'model/list': return {'data': [{'model': 'm', 'inputModalities': ['text', 'image']}]}
+                if method == 'turn/start':
+                    self.snapshot = Path(params['input'][1]['path'])
+                    if not self.snapshot.is_file() or self.snapshot.read_bytes() != image_data:
+                        raise AssertionError('snapshot not readable at turn/start')
+                    if self.snapshot.stat().st_mode & 0o777 != 0o600:
+                        raise AssertionError('snapshot is not private')
+                    if self.fail: raise RuntimeError('simulated turn failure')
+                    self.completed_turns['u'] = {'status': 'completed'}
+                    return {'turn': {'id': 'u'}}
+                raise AssertionError(method)
+            def close(self): pass
+        b = backend.Backend(lambda *_: None, auth=FakeAuth())
+        images = [('image/png', '.png', image_data)]
+        catalog = Response({'models': [{'slug': 'm', 'visibility': 'list', 'input_modalities': ['image']}]})
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(backend, 'AppServer', Server), mock.patch.object(backend.requests, 'get', return_value=catalog):
+            for mode in ('plan', 'task'):
+                self.assertEqual(b._agent(mode, 'look', directory, model='m', images=images), 'completed')
+                self.assertFalse(Server.last.snapshot.exists())
+            Server.fail = True
+            with self.assertRaisesRegex(RuntimeError, 'simulated'):
+                b._agent('task', 'look', directory, model='m', images=images)
+            self.assertFalse(Server.last.snapshot.exists())
+
     def test_login_completion_and_model_generations_are_reported(self):
         events, ready = [], threading.Event()
         def emit(event, data):

@@ -12,7 +12,7 @@ they are not independently rigged. Patrol moves the figure as a whole.
 Build with `./build-deb.sh`. Install the resulting package with:
 
 ```sh
-sudo apt install ./dist/codex-pet_2.5.0_all.deb
+sudo apt install ./dist/codex-pet_2.6.0_all.deb
 ```
 
 Quit an already-running older version through its right-click menu before
@@ -90,6 +90,14 @@ policy; it does not infer the old session's permissions. Avoid running two
 clients on the same session at once. ChatGPT authorization does not grant access
 to ChatGPT web conversation history, so ordinary chat cannot synchronize that
 history. Ordinary chat, plan and task retain separate contexts.
+
+Use **圖片** to attach up to four explicitly selected static PNG, JPEG, WebP
+or GIF files to a message. A single image is limited to 10 MiB and each request
+to 20 MiB. Images are sent only when you submit the message; the selected model
+and account must support image input. Ordinary chat keeps its current dialogue
+and images in memory and resends them with later requests until a new chat or
+application exit. Plan and task use
+private temporary image snapshots that are removed after the request completes.
 
 All three routes use ChatGPT plan access; none silently falls back to an API
 key. Plan usage may share Codex or application limits, and purchased ChatGPT

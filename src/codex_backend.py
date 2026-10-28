@@ -4,6 +4,8 @@ The callback receives (event, data) on a worker thread; UI must marshal it to
 its event loop. Only official ChatGPT OAuth and Codex app-server are used.
 """
 import json
+import base64
+import io
 import os
 import platform
 import re
@@ -11,11 +13,61 @@ from pathlib import Path
 import queue
 import shutil
 import subprocess
+import tempfile
 import threading
 
 import requests
+from PIL import Image, UnidentifiedImageError
 
 from codex_backend_auth import ChatGPTAuth, RESOURCE
+
+MAX_IMAGE_COUNT = 4
+MAX_IMAGE_BYTES = 10 * 1024 * 1024
+MAX_IMAGE_TOTAL_BYTES = 20 * 1024 * 1024
+MAX_CHAT_IMAGE_BYTES = 40 * 1024 * 1024
+IMAGE_FORMATS = {'PNG': ('image/png', '.png'), 'JPEG': ('image/jpeg', '.jpg'),
+                 'WEBP': ('image/webp', '.webp'), 'GIF': ('image/gif', '.gif')}
+
+
+def load_images(paths):
+    """Read only explicitly selected images, bounded and validated before a request."""
+    if paths is None:
+        return []
+    if not isinstance(paths, (list, tuple)) or len(paths) > MAX_IMAGE_COUNT:
+        raise ValueError('每次最多选择 4 张本地图片。')
+    images, total = [], 0
+    for path in paths:
+        if not isinstance(path, (str, os.PathLike)) or not str(path):
+            raise ValueError('请选择有效的本地图片文件。')
+        try:
+            with open(path, 'rb') as image_file:
+                data = image_file.read(MAX_IMAGE_BYTES + 1)
+        except OSError as exc:
+            raise ValueError('无法读取所选图片，请检查文件是否仍存在且可读取。') from exc
+        if not data or len(data) > MAX_IMAGE_BYTES:
+            raise ValueError('图片为空或超过单张 10 MiB 的限制。')
+        total += len(data)
+        if total > MAX_IMAGE_TOTAL_BYTES:
+            raise ValueError('本次图片总大小超过 20 MiB。')
+        try:
+            with Image.open(io.BytesIO(data)) as image:
+                if image.format not in IMAGE_FORMATS:
+                    raise ValueError('仅支持 PNG、JPEG、WebP 和静态 GIF 图片。')
+                if getattr(image, 'n_frames', 1) != 1:
+                    raise ValueError('暂不支持动态图，请选择静态图片。')
+                mime, suffix = IMAGE_FORMATS[image.format]
+                image.verify()
+        except (UnidentifiedImageError, OSError, SyntaxError, Image.DecompressionBombError) as exc:
+            raise ValueError('图片无效或尺寸过大，请选择有效的静态图片。') from exc
+        images.append((mime, suffix, data))
+    return images
+
+
+def ensure_image_supported(entry, field):
+    """Missing metadata is unknown; an explicit text-only catalog entry is not."""
+    modalities = entry.get(field)
+    if isinstance(modalities, list) and 'image' not in modalities:
+        raise RuntimeError('所选模型不支持图片输入，请选择支持图片的模型。')
 
 
 def discover_codex(home=None):
@@ -84,7 +136,7 @@ class AppServer:
         self.mode = None
         threading.Thread(target=self._read, daemon=True).start()
         try:
-            self.request('initialize', {'clientInfo': {'name': 'codex_pet', 'title': 'Codex Pet', 'version': '2.5.0'}, 'capabilities': {'experimentalApi': True}})
+            self.request('initialize', {'clientInfo': {'name': 'codex_pet', 'title': 'Codex Pet', 'version': '2.6.0'}, 'capabilities': {'experimentalApi': True}})
             self.write({'method': 'initialized', 'params': {}})
         except Exception:
             self.close()
@@ -239,6 +291,7 @@ class Backend:
         self.cancelled = threading.Event()
         self.response = None
         self.history = []
+        self.history_image_bytes = 0
         self.threads = {}
 
     def _async(self, operation, error_event='error'):
@@ -399,10 +452,11 @@ class Backend:
             self.threads.pop((mode, str(Path(cwd).expanduser().resolve())), None)
         elif mode == 'chat':
             self.history = []
+            self.history_image_bytes = 0
 
-    def send(self, mode, text, cwd, model=None, effort=None, thread_id=None, task_sandbox=None):
-        if mode not in ('chat', 'plan', 'task') or not text.strip():
-            self.emit('error', '请选择有效模式并输入内容。')
+    def send(self, mode, text, cwd, model=None, effort=None, thread_id=None, task_sandbox=None, images=None):
+        if mode not in ('chat', 'plan', 'task') or (not text.strip() and not images):
+            self.emit('error', '请选择有效模式并输入内容或添加图片。')
             return
         if thread_id and mode != 'task':
             self.emit('error', 'Codex 对话只能在任务模式中继续；计划和普通对话使用独立授权。')
@@ -416,16 +470,17 @@ class Backend:
         def run():
             status = 'failed'
             try:
+                loaded_images = load_images(images)
                 if mode in ('chat', 'plan'):
                     self._check_identity()
                 if self.cancelled.is_set():
                     status = 'interrupted'
                     return
                 if mode == 'chat':
-                    self._chat(text, model)
+                    self._chat(text, model, loaded_images)
                     status = 'completed'
                 else:
-                    status = self._agent(mode, text, cwd, model, effort, thread_id, task_sandbox)
+                    status = self._agent(mode, text, cwd, model, effort, thread_id, task_sandbox, loaded_images)
                 if self.cancelled.is_set():
                     status = 'interrupted'
             except Exception as exc:
@@ -440,21 +495,37 @@ class Backend:
                 self.emit('done', {'mode': mode, 'status': status})
         threading.Thread(target=run, daemon=True).start()
 
-    def _chat(self, text, model=None):
+    def _chat(self, text, model=None, images=()):
         token = self.auth.token()
         headers = {'Authorization': 'Bearer ' + token}
         models = self._chatgpt_models(token)
         available = {entry['slug'] for entry in models}
         if model is not None and model not in available:
             raise RuntimeError('所选模型已不在当前 ChatGPT 账户列表中，请刷新模型。')
+        selected = next(entry for entry in models if entry['slug'] == (model or models[0]['slug']))
+        if images:
+            ensure_image_supported(selected, 'input_modalities')
+            if self.history_image_bytes + sum(len(data) for _, _, data in images) > MAX_CHAT_IMAGE_BYTES:
+                raise RuntimeError('当前普通对话的图片累计超过 40 MiB，请开始新对话。')
         if self.cancelled.is_set():
             return
-        inputs = self.history + [{'role': 'user', 'content': text}]
+        content = text
+        if images:
+            content = ([{'type': 'input_text', 'text': text}] if text else [])
+            content += [{'type': 'input_image', 'image_url': 'data:' + mime + ';base64,' + base64.b64encode(data).decode('ascii')}
+                        for mime, _, data in images]
+        inputs = self.history + [{'role': 'user', 'content': content}]
         response = requests.post(RESOURCE + '/responses', headers=headers,
             json={'model': model or models[0]['slug'], 'input': inputs, 'store': False, 'stream': True},
             stream=True, timeout=(30, 30))
         self.response = response
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except requests.HTTPError as exc:
+            response.close()
+            if images:
+                raise RuntimeError('图片请求被服务拒绝，请检查所选模型的图片能力、账户授权或额度。') from exc
+            raise
         answer, completed = [], False
         try:
             for line in response.iter_lines(decode_unicode=True):
@@ -483,8 +554,9 @@ class Backend:
         if not completed:
             raise RuntimeError('ChatGPT 流未完整结束，请重试。')
         self.history = inputs + [{'role': 'assistant', 'content': ''.join(answer)}]
+        self.history_image_bytes += sum(len(data) for _, _, data in images)
 
-    def _agent(self, mode, text, cwd, model=None, effort=None, thread_id=None, task_sandbox=None):
+    def _agent(self, mode, text, cwd, model=None, effort=None, thread_id=None, task_sandbox=None, images=()):
         if thread_id and task_sandbox not in ('read-only', 'workspace-write'):
             raise RuntimeError('无法可靠继承历史会话的原有权限，请明确选择本次运行的只读或工作区写入权限。')
         directory = Path(cwd).expanduser().resolve()
@@ -493,6 +565,7 @@ class Backend:
         token = self.auth.token() if mode == 'plan' else None
         server = AppServer(self.emit, token=token, executable=self.executable)
         server.mode = mode
+        snapshots = None
         with self.active_lock:
             self.active = server
         try:
@@ -514,6 +587,8 @@ class Backend:
                 if model is not None and model not in {entry['slug'] for entry in available}:
                     raise RuntimeError('所选模型已不在当前 ChatGPT 账户列表中，请刷新模型。')
                 params['model'] = model or available[0]['slug']
+                if images:
+                    ensure_image_supported(next(entry for entry in available if entry['slug'] == params['model']), 'input_modalities')
             elif model:
                 params['model'] = model
             key = (mode, str(directory))
@@ -545,7 +620,31 @@ class Backend:
                 self.threads[key] = started['thread']['id']
             thread = started['thread']
             self.emit('thread', {'mode': mode, 'thread': thread})
-            start = {'threadId': thread['id'], 'input': [{'type': 'text', 'text': text}]}
+            if images and mode == 'task':
+                selected_model = model or started.get('model')
+                cursor = None
+                while True:
+                    query = {'limit': 100, 'includeHidden': False}
+                    if cursor:
+                        query['cursor'] = cursor
+                    catalog = server.request('model/list', query)
+                    entry = next((entry for entry in catalog.get('data', [])
+                                  if (entry.get('model') or entry.get('id')) == selected_model), None)
+                    if entry is not None:
+                        ensure_image_supported(entry, 'inputModalities')
+                        break
+                    cursor = catalog.get('nextCursor')
+                    if not cursor:
+                        break
+            turn_input = [{'type': 'text', 'text': text}] if text else []
+            if images:
+                snapshots = tempfile.TemporaryDirectory(prefix='codex-pet-images-')
+                for index, (_, suffix, data) in enumerate(images):
+                    snapshot = Path(snapshots.name) / (str(index) + suffix)
+                    snapshot.write_bytes(data)
+                    snapshot.chmod(0o600)
+                    turn_input.append({'type': 'localImage', 'path': str(snapshot)})
+            start = {'threadId': thread['id'], 'input': turn_input}
             if model:
                 start['model'] = model
             if effort:
@@ -554,7 +653,12 @@ class Backend:
                 start['collaborationMode'] = {'mode': 'plan', 'settings': {'model': params['model'], 'developer_instructions': None}}
                 start['sandboxPolicy'] = {'type': 'readOnly', 'networkAccess': False}
                 start['approvalPolicy'] = 'never'
-            turn = server.request('turn/start', start)['turn']
+            try:
+                turn = server.request('turn/start', start)['turn']
+            except RuntimeError as exc:
+                if images:
+                    raise RuntimeError('图片任务无法启动：' + str(exc)) from exc
+                raise
             if self.cancelled.is_set():
                 server.request('turn/interrupt', {'threadId': thread['id'], 'turnId': turn['id']})
             while True:
@@ -565,10 +669,16 @@ class Backend:
                         return turn_status
                     if self.cancelled.is_set():
                         return 'interrupted'
+                    if images:
+                        raise RuntimeError('图片任务未完成，请检查模型的图片能力、账户授权或额度：' + str(turn_status))
                     raise RuntimeError('Codex 任务未完成：' + str(turn_status))
                 server.handle(server.next_event())
         finally:
-            server.close()
+            try:
+                server.close()
+            finally:
+                if snapshots is not None:
+                    snapshots.cleanup()
 
     def cancel(self):
         self.cancelled.set()

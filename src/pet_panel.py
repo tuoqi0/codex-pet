@@ -12,7 +12,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-from codex_backend import Backend
+from codex_backend import Backend, MAX_IMAGE_BYTES, MAX_IMAGE_COUNT, MAX_IMAGE_TOTAL_BYTES
 
 
 STYLE = """
@@ -46,6 +46,8 @@ QPushButton#primary { background: #a98bcf; color: white; border: 0; padding: 9px
 QPushButton#primary:hover { background: #9978c4; }
 QPushButton#primary:disabled { background: #dcd2e8; color: #f5f1f8; }
 QScrollArea#conversation { background: #fffdfd; border: 1px solid #eae4f0; border-radius: 12px; }
+QListWidget#imageList { background: #f9f6fc; border: 1px solid #e3d9ed; border-radius: 8px; padding: 3px; }
+QListWidget#imageList::item:selected { background: #e4d7f1; color: #473b55; }
 QScrollArea#limitsScroll { background: transparent; border: 0; }
 QWidget#limitsContent { background: #faf8fd; }
 QWidget#messages { background: #fffdfd; }
@@ -219,6 +221,9 @@ class PetPanel(QDialog):
         self.thread_loading = False
         self.thread_cursor = None
         self.thread_reading = None
+        self.images = []
+        self.inflight_draft = None
+        self.failed_drafts = []
         self.progress_entries = []
         self.progress_plans = {}
         self.progress_mode = None
@@ -397,10 +402,38 @@ class PetPanel(QDialog):
         self.prompt.setMinimumHeight(54)
         self.prompt.setMaximumHeight(72)
         layout.addWidget(self.prompt)
+        self.attachments = QWidget()
+        attachment_row = QHBoxLayout(self.attachments)
+        attachment_row.setContentsMargins(0, 0, 0, 0)
+        attachment_content = QVBoxLayout()
+        attachment_content.setSpacing(2)
+        self.upload_hint = QLabel()
+        self.upload_hint.setObjectName('muted')
+        self.upload_hint.setWordWrap(True)
+        attachment_content.addWidget(self.upload_hint)
+        self.image_list = QListWidget()
+        self.image_list.setObjectName('imageList')
+        self.image_list.setMaximumHeight(54)
+        self.image_list.setAccessibleName('本次發送的圖片')
+        attachment_content.addWidget(self.image_list)
+        attachment_row.addLayout(attachment_content, 1)
+        self.remove_image = QPushButton('移除所選')
+        self.remove_image.setObjectName('compact')
+        self.remove_image.clicked.connect(self._remove_image)
+        attachment_row.addWidget(self.remove_image)
+        self.attachments.hide()
+        layout.addWidget(self.attachments)
         buttons = QHBoxLayout()
-        hint = QLabel('✦  隨時可以和我說話')
-        hint.setObjectName('muted')
-        buttons.addWidget(hint)
+        self.add_image = QPushButton('＋ 圖片')
+        self.add_image.setObjectName('compact')
+        self.add_image.clicked.connect(self._choose_images)
+        buttons.addWidget(self.add_image)
+        self.restore_draft = QPushButton('恢復失敗草稿')
+        self.restore_draft.setObjectName('compact')
+        self.restore_draft.setToolTip('把先前失敗的內容加回目前草稿，不會覆蓋目前輸入。')
+        self.restore_draft.clicked.connect(self._restore_failed_draft)
+        self.restore_draft.hide()
+        buttons.addWidget(self.restore_draft)
         buttons.addStretch(1)
         self.cancel_button = QPushButton('停止')
         self.cancel_button.setEnabled(False)
@@ -530,11 +563,19 @@ class PetPanel(QDialog):
             self.status.setText('正在執行，請先停止或等待完成再切換模式。')
             return
         notices = {
-            'chat': '普通對話使用 ChatGPT 授權，無本地工具。',
+            'chat': '普通對話使用 ChatGPT 授權，無本地工具。圖片加入上下文後，後續請求會再次傳送，直至新對話。',
             'plan': '計劃使用 ChatGPT 授權及只讀工作目錄；用量可能與 Codex 共享。',
             'task': '任務使用已登入的 Codex ChatGPT 帳戶；可依設定執行工具與請求審批。',
         }
         self.notice.setText(notices[mode] + ' 各模式各自保留上下文；不會同步 ChatGPT 網站對話。')
+        image_notice = ('普通對話：發送的圖片會隨後續請求再次傳送，直至新對話。'
+                        if mode == 'chat' else
+                        '計劃／任務：圖片由 Codex 線程管理；臨時副本在執行結束後清理。')
+        self.upload_hint.setText(image_notice)
+        self.add_image.setToolTip(
+            '選擇本機圖片，按發送時上傳。' + image_notice +
+            f'最多 {MAX_IMAGE_COUNT} 張，單張 {MAX_IMAGE_BYTES // (1024 * 1024)} MiB，'
+            f'總計 {MAX_IMAGE_TOTAL_BYTES // (1024 * 1024)} MiB。')
         if hasattr(self, 'transcripts'):
             self.transcript = self.transcripts[mode]
             self.transcript_stack.setCurrentWidget(self.transcript)
@@ -634,6 +675,8 @@ class PetPanel(QDialog):
         self.status.setText('已開始新對話；原有 Codex 歷史不會刪除。')
 
     def _choose_cwd(self):
+        if self.busy:
+            return
         selected = QFileDialog.getExistingDirectory(self, '選擇工作目錄', self.cwd or str(Path.home()))
         if selected:
             if selected != self.cwd:
@@ -649,6 +692,67 @@ class PetPanel(QDialog):
                     self.transcripts[mode].clear()
             self.cwd = selected
             self.project_label.setText(selected)
+
+    def _choose_images(self):
+        if self.busy or self.login_inflight:
+            return
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, '選擇要隨本次對話上傳的圖片', str(Path.home()),
+            '圖片 (*.png *.PNG *.jpg *.JPG *.jpeg *.JPEG *.webp *.WEBP *.gif *.GIF)')
+        added = 0
+        over_limit = False
+        for path in paths:
+            if path in self.images:
+                continue
+            if len(self.images) >= MAX_IMAGE_COUNT:
+                over_limit = True
+                break
+            self.images.append(path)
+            added += 1
+        self._show_images()
+        if over_limit:
+            self.status.setText(f'一次最多附加 {MAX_IMAGE_COUNT} 張圖片，請先移除不需要的圖片。')
+        elif added:
+            self.status.setText('圖片已選擇；按發送時上傳。' + self.upload_hint.text())
+
+    def _show_images(self):
+        self.image_list.clear()
+        for path in self.images:
+            self.image_list.addItem(Path(path).name)
+        self.attachments.setVisible(bool(self.images))
+        self.remove_image.setEnabled(not self.busy and bool(self.images))
+
+    def _remove_image(self):
+        row = self.image_list.currentRow()
+        if 0 <= row < len(self.images) and not self.busy:
+            del self.images[row]
+            self._show_images()
+
+    def _update_failed_drafts(self):
+        self.restore_draft.setVisible(bool(self.failed_drafts))
+        if self.failed_drafts:
+            self.restore_draft.setText(f'恢復失敗草稿 ({len(self.failed_drafts)})')
+        self.restore_draft.setEnabled(not self.busy)
+
+    def _restore_failed_draft(self):
+        if self.busy or not self.failed_drafts:
+            return
+        draft = self.failed_drafts[0]
+        if (draft['mode'] != self.mode.currentData()
+                or (draft['mode'] != 'chat' and draft['cwd'] != self.cwd)):
+            self.status.setText('請切回原對話模式和工作目錄，再恢復這份草稿。')
+            return
+        images = self.images + [path for path in draft['images'] if path not in self.images]
+        if len(images) > MAX_IMAGE_COUNT:
+            self.status.setText('圖片數量超過上限，請先移除目前草稿中的圖片，再恢復。')
+            return
+        current = self.prompt.toPlainText()
+        self.prompt.setPlainText(current + ('\n\n' if current else '') + draft['text'])
+        self.images = images
+        self.failed_drafts.pop(0)
+        self._show_images()
+        self._update_failed_drafts()
+        self.status.setText('已恢復草稿。上次請求可能已部分處理，重試可能重複。')
 
     def _open_threads(self):
         if self.busy or self.thread_dialog is not None:
@@ -756,7 +860,14 @@ class PetPanel(QDialog):
             for item in turn.get('items', []):
                 kind = item.get('type')
                 if kind == 'userMessage':
-                    parts = [part.get('text', '') for part in item.get('content', []) if isinstance(part, dict)]
+                    parts = []
+                    for part in item.get('content', []):
+                        if not isinstance(part, dict):
+                            continue
+                        if part.get('type') in ('image', 'localImage', 'input_image'):
+                            parts.append('[圖片]')
+                        elif part.get('text'):
+                            parts.append(part['text'])
                     text = '\n'.join(part for part in parts if part)
                     if text:
                         transcript.add_message('user', text)
@@ -777,7 +888,8 @@ class PetPanel(QDialog):
         self.status.setText('已讀取 Codex 對話；發送後會在此對話中繼續。')
 
     def _send(self):
-        text = self.prompt.toPlainText().strip()
+        draft_text = self.prompt.toPlainText()
+        text = draft_text.strip()
         mode = self.mode.currentData()
         if not text or self.busy:
             return
@@ -810,18 +922,27 @@ class PetPanel(QDialog):
         self.choose_cwd.setEnabled(False)
         self.permission.setEnabled(False)
         self.login_button.setEnabled(False)
+        self.add_image.setEnabled(False)
+        self.remove_image.setEnabled(False)
+        self.restore_draft.setEnabled(False)
         self.progress_entries = []
         self.progress_plans = {}
         self.progress_log.clear()
         self.progress_panel.hide()
         self.prompt.clear()
-        self.transcript.start_exchange(text)
+        images = list(self.images)
+        self.inflight_draft = {'mode': mode, 'cwd': self.cwd, 'text': draft_text, 'images': images}
+        self.images.clear()
+        self._show_images()
+        names = '\n'.join(Path(path).name for path in images)
+        self.transcript.start_exchange(text + ('\n\n[圖片附件]\n' + names if names else ''))
         if mode in ('task', 'plan'):
             self.action_callback('work')
         self.backend.send(mode, text, self.cwd, selected['id'],
                           self.effort.currentData() if mode == 'task' else None,
                           self.selected_thread if mode == 'task' else None,
-                          self.permission.currentData() if mode == 'task' and self.selected_thread else None)
+                          self.permission.currentData() if mode == 'task' and self.selected_thread else None,
+                          images or None)
 
     def _append(self, text):
         self.transcript.append_response(text)
@@ -927,6 +1048,8 @@ class PetPanel(QDialog):
         elif event == 'login_complete':
             self.login_inflight = False
             self.login_button.setEnabled(not self.busy)
+            self.images.clear()
+            self._show_images()
             for mode in ('chat', 'plan'):
                 self.model_generation[mode] += 1
                 self.models_loading.discard(mode)
@@ -952,6 +1075,17 @@ class PetPanel(QDialog):
                 self.status.setText('請求失敗：' + self.last_error)
             else:
                 self.status.setText('已結束：' + str(result.get('status', '未知')))
+            draft = self.inflight_draft
+            self.inflight_draft = None
+            if result.get('status') != 'completed' and draft:
+                if not self.prompt.toPlainText() and not self.images:
+                    self.prompt.setPlainText(draft['text'])
+                    self.images = draft['images']
+                    self._show_images()
+                    self.status.setText(self.status.text() + '；草稿已恢復，上次請求可能已部分處理。')
+                else:
+                    self.failed_drafts.append(draft)
+                    self.status.setText(self.status.text() + '；草稿可恢復，上次請求可能已部分處理。')
             if result.get('status') == 'completed' and result.get('mode') == 'task':
                 self.action_callback('celebrate')
             else:
@@ -993,6 +1127,9 @@ class PetPanel(QDialog):
         self.choose_cwd.setEnabled(True)
         self.permission.setEnabled(True)
         self.login_button.setEnabled(not self.login_inflight)
+        self.add_image.setEnabled(True)
+        self.remove_image.setEnabled(bool(self.images))
+        self._update_failed_drafts()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

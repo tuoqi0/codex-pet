@@ -55,7 +55,7 @@ class PanelTests(unittest.TestCase):
     def test_chat_progress_and_error_completion(self):
         self.panel.prompt.setPlainText('你好')
         self.panel._send()
-        self.assertEqual(self.panel.backend.calls[-1], ('send', 'chat', '你好', None, 'model', None, None, None))
+        self.assertEqual(self.panel.backend.calls[-1], ('send', 'chat', '你好', None, 'model', None, None, None, None))
         self.panel.bridge.received.emit('delta', '您好')
         self.assertIn('您好', self.panel.transcript.toPlainText())
         self.panel.bridge.received.emit('error', '授權失敗')
@@ -68,7 +68,7 @@ class PanelTests(unittest.TestCase):
         self.panel.cwd = '/tmp'
         self.panel.prompt.setPlainText('檢查')
         self.panel._send()
-        self.assertEqual(self.panel.backend.calls[-1], ('send', 'task', '檢查', '/tmp', 'model', None, None, None))
+        self.assertEqual(self.panel.backend.calls[-1], ('send', 'task', '檢查', '/tmp', 'model', None, None, None, None))
         self.assertEqual(self.actions[-1], 'work')
         self.panel.bridge.received.emit('done', {'mode': 'task', 'status': 'completed'})
         self.assertEqual(self.actions[-1], 'celebrate')
@@ -288,6 +288,144 @@ class PanelTests(unittest.TestCase):
         self.assertFalse(self.panel.login_inflight)
         self.assertEqual(self.panel.model.currentData()['id'], 'model')
 
+    def test_images_require_selection_send_and_can_be_removed(self):
+        selected = ['/private/a.png', '/private/b.jpg', '/private/a.png']
+        with mock.patch.object(pet_panel.QFileDialog, 'getOpenFileNames', return_value=(selected, '')):
+            self.panel.add_image.click()
+        self.assertEqual(self.panel.images, ['/private/a.png', '/private/b.jpg'])
+        self.assertEqual(self.panel.image_list.item(0).text(), 'a.png')
+        self.assertFalse(any(call[0] == 'send' for call in self.panel.backend.calls))
+        self.panel.image_list.setCurrentRow(0)
+        self.panel.remove_image.click()
+        self.assertEqual(self.panel.images, ['/private/b.jpg'])
+        self.panel.prompt.setPlainText('請看圖片')
+        self.panel._send()
+        self.assertEqual(self.panel.backend.calls[-1], ('send', 'chat', '請看圖片', None, 'model', None, None, None, ['/private/b.jpg']))
+        self.assertEqual(self.panel.images, [])
+        self.assertIn('b.jpg', self.panel.transcript.toPlainText())
+        self.assertNotIn('/private/', self.panel.transcript.toPlainText())
+        self.panel.bridge.received.emit('done', {'mode': 'chat', 'status': 'completed'})
+        self.panel.prompt.setPlainText('再聊')
+        self.panel._send()
+        self.assertIsNone(self.panel.backend.calls[-1][-1])
+
+    def test_image_context_disclosure_changes_with_mode(self):
+        self.assertIn('後續請求會再次傳送', self.panel.notice.text())
+        self.assertIn('後續請求再次傳送', self.panel.upload_hint.text())
+        self.assertIn('新對話', self.panel.upload_hint.text())
+        with mock.patch.object(pet_panel.QFileDialog, 'getOpenFileNames', return_value=(['/tmp/one.png'], '')):
+            self.panel.add_image.click()
+        self.assertIn('後續請求再次傳送', self.panel.status.text())
+        for mode in ('plan', 'task'):
+            self.panel.mode.setCurrentIndex(self.panel.mode.findData(mode))
+            self.assertIn('Codex 線程管理', self.panel.upload_hint.text())
+            self.assertIn('臨時副本', self.panel.upload_hint.text())
+            self.assertIn('執行結束後清理', self.panel.upload_hint.text())
+
+    def test_cancel_or_exceeding_image_selection_does_not_send_files(self):
+        with mock.patch.object(pet_panel.QFileDialog, 'getOpenFileNames', return_value=([], '')):
+            self.panel.add_image.click()
+        self.assertEqual(self.panel.images, [])
+        with mock.patch.object(pet_panel.QFileDialog, 'getOpenFileNames',
+                               return_value=([f'/tmp/{i}.png' for i in range(5)], '')):
+            self.panel.add_image.click()
+        self.assertEqual(len(self.panel.images), 4)
+        self.assertIn('4', self.panel.status.text())
+        self.assertFalse(any(call[0] == 'send' for call in self.panel.backend.calls))
+
+    def test_images_use_selected_task_mode_and_permission(self):
+        self.panel.mode.setCurrentIndex(2)
+        self.panel.cwd = '/tmp'
+        self.panel.selected_thread = 'history'
+        self.panel.model_choice['task'] = '__thread__'
+        self.panel._show_models('task')
+        self.panel._show_permission()
+        self.panel.permission.setCurrentIndex(self.panel.permission.findData('read-only'))
+        with mock.patch.object(pet_panel.QFileDialog, 'getOpenFileNames', return_value=(['/tmp/pet.webp'], '')):
+            self.panel.add_image.click()
+        self.panel.prompt.setPlainText('看圖')
+        self.panel._send()
+        self.assertEqual(self.panel.backend.calls[-1], ('send', 'task', '看圖', '/tmp', None, None, 'history', 'read-only', ['/tmp/pet.webp']))
+
+    def test_images_are_forwarded_in_plan_mode(self):
+        self.panel.mode.setCurrentIndex(1)
+        self.panel.cwd = '/tmp'
+        with mock.patch.object(pet_panel.QFileDialog, 'getOpenFileNames', return_value=(['/tmp/plan.png'], '')):
+            self.panel.add_image.click()
+        self.panel.prompt.setPlainText('研究圖片')
+        self.panel._send()
+        self.assertEqual(self.panel.backend.calls[-1], ('send', 'plan', '研究圖片', '/tmp', 'model', None, None, None, ['/tmp/plan.png']))
+
+    def test_failed_image_send_restores_unmodified_draft_and_does_not_resend(self):
+        with mock.patch.object(pet_panel.QFileDialog, 'getOpenFileNames', return_value=(['/tmp/one.png'], '')):
+            self.panel.add_image.click()
+        self.panel.prompt.setPlainText('  讀取圖片\n')
+        self.panel._send()
+        self.panel.bridge.received.emit('error', '讀取失敗')
+        self.panel.bridge.received.emit('done', {'mode': 'chat', 'status': 'failed'})
+        self.assertEqual(self.panel.prompt.toPlainText(), '  讀取圖片\n')
+        self.assertEqual(self.panel.images, ['/tmp/one.png'])
+        self.assertIn('草稿已恢復', self.panel.status.text())
+        self.assertEqual(sum(call[0] == 'send' for call in self.panel.backend.calls), 1)
+        self.assertFalse(self.panel.busy)
+
+    def test_interrupted_send_does_not_overwrite_new_input_and_recovery_is_explicit(self):
+        with mock.patch.object(pet_panel.QFileDialog, 'getOpenFileNames', return_value=(['/tmp/one.png'], '')):
+            self.panel.add_image.click()
+        self.panel.prompt.setPlainText('原草稿')
+        self.panel._send()
+        self.panel.prompt.setPlainText('後續輸入')
+        self.panel.bridge.received.emit('done', {'mode': 'chat', 'status': 'interrupted'})
+        self.assertEqual(self.panel.prompt.toPlainText(), '後續輸入')
+        self.assertEqual(self.panel.images, [])
+        self.assertEqual(len(self.panel.failed_drafts), 1)
+        self.assertFalse(self.panel.restore_draft.isHidden())
+        self.panel.restore_draft.click()
+        self.assertEqual(self.panel.prompt.toPlainText(), '後續輸入\n\n原草稿')
+        self.assertEqual(self.panel.images, ['/tmp/one.png'])
+        self.assertEqual(self.panel.failed_drafts, [])
+        self.assertIn('可能已部分處理', self.panel.status.text())
+
+    def test_draft_recovery_preserves_inputs_when_image_limit_would_be_exceeded(self):
+        self.panel.failed_drafts = [{'mode': 'chat', 'cwd': None, 'text': 'old', 'images': ['/tmp/old.png']}]
+        self.panel.images = [f'/tmp/{i}.png' for i in range(4)]
+        self.panel.prompt.setPlainText('new')
+        self.panel._update_failed_drafts()
+        self.panel.restore_draft.click()
+        self.assertEqual(self.panel.prompt.toPlainText(), 'new')
+        self.assertEqual(len(self.panel.images), 4)
+        self.assertEqual(len(self.panel.failed_drafts), 1)
+        self.assertIn('超過上限', self.panel.status.text())
+
+    def test_small_window_keeps_selected_images_and_controls_reachable(self):
+        self.panel.resize(480, 580)
+        self.panel.mode.setCurrentIndex(2)
+        self.panel.cwd = '/tmp'
+        self.panel.selected_thread = 'history'
+        self.panel.model_choice['task'] = '__thread__'
+        self.panel._show_models('task')
+        self.panel._show_permission()
+        with mock.patch.object(pet_panel.QFileDialog, 'getOpenFileNames', return_value=(['/tmp/one.png', '/tmp/two.jpg'], '')):
+            self.panel.add_image.click()
+        self.panel.show()
+        self.panel._progress({'kind': 'item', 'phase': 'started', 'type': 'webSearch'})
+        QTest.qWait(30)
+        for widget in (self.panel.image_list, self.panel.remove_image, self.panel.add_image, self.panel.send_button):
+            self.assertTrue(self.panel.rect().contains(widget.mapTo(self.panel, widget.rect().center())))
+        self.assertEqual(self.panel.image_list.count(), 2)
+
+    def test_history_image_does_not_expose_snapshot_paths(self):
+        self.panel.mode.setCurrentIndex(2)
+        self.panel._open_threads()
+        self.panel.bridge.received.emit('codex_threads', {'data': [{'id': 'two', 'cwd': '/tmp'}]})
+        self.panel.thread_list.setCurrentRow(0)
+        self.panel.thread_open.click()
+        self.panel.bridge.received.emit('codex_thread', {'thread': {'id': 'two', 'cwd': '/tmp', 'turns': [
+            {'items': [{'type': 'userMessage', 'content': [{'type': 'text', 'text': '看圖'},
+              {'type': 'localImage', 'path': '/tmp/private-snapshot.png'}]}]}]}})
+        self.assertIn('[圖片]', self.panel.transcript.toPlainText())
+        self.assertNotIn('private-snapshot', self.panel.transcript.toPlainText())
+
     def test_explicit_codex_history_selection_pagination_and_new_conversation(self):
         self.panel.mode.setCurrentIndex(2)
         self.assertFalse(any(call[0].startswith('codex_thread') for call in self.panel.backend.calls))
@@ -311,7 +449,7 @@ class PanelTests(unittest.TestCase):
         self.assertIn('選擇本次執行權限', self.panel.status.text())
         self.panel.permission.setCurrentIndex(self.panel.permission.findData('read-only'))
         self.panel._send()
-        self.assertEqual(self.panel.backend.calls[-1], ('send', 'task', '繼續', '/tmp', None, None, 'two', 'read-only'))
+        self.assertEqual(self.panel.backend.calls[-1], ('send', 'task', '繼續', '/tmp', None, None, 'two', 'read-only', None))
         self.assertFalse(self.panel.mode.isEnabled())
         self.assertFalse(self.panel.choose_cwd.isEnabled())
         self.assertFalse(self.panel.permission.isEnabled())
@@ -336,7 +474,7 @@ class PanelTests(unittest.TestCase):
         self.panel.permission.setCurrentIndex(self.panel.permission.findData('workspace-write'))
         self.panel.prompt.setPlainText('繼續')
         self.panel._send()
-        self.assertEqual(self.panel.backend.calls[-1], ('send', 'task', '繼續', '/tmp', 'model', 'high', 'existing', 'workspace-write'))
+        self.assertEqual(self.panel.backend.calls[-1], ('send', 'task', '繼續', '/tmp', 'model', 'high', 'existing', 'workspace-write', None))
 
     def test_progress_stream_and_model_reroute_are_readable(self):
         self.panel.mode.setCurrentIndex(2)
