@@ -1,4 +1,4 @@
-"""Exercise actual Qt mouse handling without requiring a desktop compositor."""
+"""Exercise Qt mouse handling without requiring a desktop compositor."""
 import os
 import sys
 import unittest
@@ -8,7 +8,7 @@ from unittest import mock
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from PyQt5.QtCore import QPoint, QEvent, Qt
-from PyQt5.QtGui import QMouseEvent
+from PyQt5.QtGui import QMouseEvent, qAlpha
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication
 import codex_pet
@@ -20,11 +20,8 @@ class WindowTests(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def setUp(self):
-        # Only event behavior is under test here, so load the existing image for
-        # all poses. Package rendering is checked separately with real assets.
-        image = Path(__file__).resolve().parents[1] / 'assets' / 'dragon-lady.png'
-        with mock.patch.object(codex_pet, 'asset_path', return_value=image):
-            self.pet = codex_pet.CodexPet()
+        self.manager = mock.Mock()
+        self.pet = codex_pet.CodexPet(self.manager)
         self.pet.show()
         self.app.processEvents()
 
@@ -33,28 +30,58 @@ class WindowTests(unittest.TestCase):
         self.pet.deleteLater()
         self.app.processEvents()
 
-    def test_click_and_double_click_greet(self):
-        QTest.mouseClick(self.pet, Qt.LeftButton, pos=QPoint(160, 200))
+    def test_single_click_greets_only_after_double_click_interval(self):
+        QTest.mouseClick(self.pet, Qt.LeftButton, pos=QPoint(160, 100))
+        self.assertEqual(self.pet.behavior.message, '')
+        self.assertTrue(self.pet.click_timer.isActive())
+        QTest.qWait(QApplication.doubleClickInterval() + 100)
         self.assertTrue(self.pet.behavior.message)
-        self.assertEqual(self.pet.behavior.pose(codex_pet.time.monotonic()), 'wave')
-        QTest.mouseDClick(self.pet, Qt.LeftButton, pos=QPoint(160, 200))
-        self.assertEqual(self.pet.behavior.message, '很高興見到你！')
+        self.manager.open_floating.assert_not_called()
 
-    def test_drag_does_not_greet(self):
-        pos = QPoint(160, 200)
+    def test_double_click_opens_panel_and_cancels_single_click(self):
+        pos = QPoint(160, 100)
+        QTest.mouseClick(self.pet, Qt.LeftButton, pos=pos)
+        self.assertTrue(self.pet.click_timer.isActive())
+        QTest.mouseDClick(self.pet, Qt.LeftButton, pos=pos)
+        QTest.mouseRelease(self.pet, Qt.LeftButton, pos=pos)
+        self.manager.open_floating.assert_called_once_with(self.pet)
+        self.assertFalse(self.pet.click_timer.isActive())
+        QTest.qWait(QApplication.doubleClickInterval() + 100)
+        self.assertEqual(self.pet.behavior.message, '')
+
+    def test_drag_does_not_greet_or_open_panel(self):
+        pos = QPoint(160, 100)
         QTest.mousePress(self.pet, Qt.LeftButton, pos=pos)
-        moved = QPoint(200, 230)
+        moved = QPoint(200, 130)
         event = QMouseEvent(QEvent.MouseMove, moved, self.pet.mapToGlobal(moved),
                             Qt.NoButton, Qt.LeftButton, Qt.NoModifier)
         QApplication.sendEvent(self.pet, event)
         self.assertTrue(self.pet.drag_moved)
         QTest.mouseRelease(self.pet, Qt.LeftButton, pos=moved)
         self.assertFalse(self.pet.behavior.dragging)
+        QTest.qWait(QApplication.doubleClickInterval() + 100)
         self.assertEqual(self.pet.behavior.message, '')
+        self.manager.open_floating.assert_not_called()
 
-    def test_wings_and_tail_move_while_centre_stays_fixed(self):
-        first = self.pet.frames['idle'][0].toImage()
-        quarter = self.pet.frames['idle'][3].toImage()
+    def test_drag_cancels_a_pending_single_click(self):
+        pos = QPoint(160, 100)
+        QTest.mouseClick(self.pet, Qt.LeftButton, pos=pos)
+        self.assertTrue(self.pet.click_timer.isActive())
+        QTest.mousePress(self.pet, Qt.LeftButton, pos=pos)
+        moved = QPoint(200, 130)
+        event = QMouseEvent(QEvent.MouseMove, moved, self.pet.mapToGlobal(moved),
+                            Qt.NoButton, Qt.LeftButton, Qt.NoModifier)
+        QApplication.sendEvent(self.pet, event)
+        QTest.mouseRelease(self.pet, Qt.LeftButton, pos=moved)
+        QTest.qWait(QApplication.doubleClickInterval() + 100)
+        self.assertEqual(self.pet.behavior.message, '')
+        self.manager.open_floating.assert_not_called()
+
+    def test_seated_wings_and_tail_move_without_fading_centre(self):
+        # The seated character fills this wide image differently from the old
+        # standing image: both wings are near the upper sides, tail lower right.
+        frames = [frame.toImage() for frame in self.pet.frames['idle']]
+        first, quarter = frames[0], frames[3]
         w, h = first.width(), first.height()
 
         def differences(x0, y0, x1, y1):
@@ -62,9 +89,32 @@ class WindowTests(unittest.TestCase):
                        for x in range(int(w*x0), int(w*x1), 3)
                        for y in range(int(h*y0), int(h*y1), 3))
 
-        self.assertGreater(differences(0, .12, .34, .46), 20)
-        self.assertGreater(differences(.70, .48, 1, .94), 20)
+        self.assertGreater(differences(.25, .22, .47, .50), 20)
+        self.assertGreater(differences(.73, .22, .92, .50), 20)
+        self.assertGreater(differences(.72, .53, .92, .84), 20)
         self.assertEqual(differences(.40, .12, .60, .94), 0)
+        # A fully drawn centre remains opaque across every motion frame: no
+        # global alpha fade or overlay that would make the face flicker.
+        for frame in frames:
+            opaque = sum(qAlpha(frame.pixel(x, y)) >= 230
+                         for x in range(int(w*.50), int(w*.63), 2)
+                         for y in range(int(h*.17), int(h*.27), 2))
+            self.assertGreater(opaque, 400)
+            self.assertEqual(opaque, sum(qAlpha(first.pixel(x, y)) >= 230
+                                         for x in range(int(w*.50), int(w*.63), 2)
+                                         for y in range(int(h*.17), int(h*.27), 2)))
+
+        # Check the actual widget rendering as well as source frames; every
+        # pose must keep the face area opaque when it is painted.
+        for pose in ('idle', 'blink', 'wave'):
+            with mock.patch.object(self.pet.behavior, 'pose', return_value=pose), \
+                    mock.patch('codex_pet.time.monotonic', return_value=100):
+                image = self.pet.grab().toImage()
+            iw, ih = image.width(), image.height()
+            alphas = [qAlpha(image.pixel(x, y))
+                      for x in range(int(iw*.50), int(iw*.63))
+                      for y in range(int(ih*.17), int(ih*.27))]
+            self.assertGreater(sum(alpha >= 230 for alpha in alphas), len(alphas) * .75)
 
 
 if __name__ == '__main__':

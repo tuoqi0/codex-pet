@@ -3,7 +3,6 @@ import random
 
 
 class PetBehavior:
-    ARRIVAL_SECONDS = 3.8
     REACTION_SECONDS = 2.8
     WAVE_FRAME_SECONDS = 0.24
     BLINK_SECONDS = 0.18
@@ -11,7 +10,6 @@ class PetBehavior:
 
     def __init__(self, now, rng=None, patrol=True):
         self.rng = rng or random.Random()
-        self.started = now
         self.last_tick = now
         self.blink_at = now + self.rng.uniform(3.0, 6.0)
         self.blink_until = 0.0
@@ -22,16 +20,11 @@ class PetBehavior:
         self.walk_at = now + self.rng.uniform(8.0, 13.0)
         self.direction = 1
         self.message = ''
+        self.reaction_pose = 'wave'
 
-    def replay(self, now):
-        self.started = now
-        self.last_tick = now
-        self.reaction_until = 0.0
-        self.walk_until = 0.0
-        self.walk_at = now + self.rng.uniform(8.0, 13.0)
-
-    def react(self, now, message):
+    def react(self, now, message, pose='wave'):
         self.message = message
+        self.reaction_pose = pose
         self.reaction_until = now + self.REACTION_SECONDS
         self.walk_until = 0.0
         self.walk_at = self.reaction_until + self.rng.uniform(5.0, 9.0)
@@ -59,8 +52,7 @@ class PetBehavior:
         if now >= self.blink_at:
             self.blink_until = now + self.BLINK_SECONDS
             self.blink_at = now + self.rng.uniform(3.0, 7.0)
-        if (not self.patrol or self.dragging or now < self.started + self.ARRIVAL_SECONDS
-                or now < self.reaction_until):
+        if not self.patrol or self.dragging or now < self.reaction_until:
             return 0.0
         if self.walk_until and now >= self.walk_until:
             self.walk_until = 0.0
@@ -75,6 +67,8 @@ class PetBehavior:
 
     def pose(self, now):
         if now < self.reaction_until:
+            if self.reaction_pose != 'wave':
+                return self.reaction_pose
             elapsed = now - (self.reaction_until - self.REACTION_SECONDS)
             return 'wave' if int(elapsed / self.WAVE_FRAME_SECONDS) % 2 == 0 else 'wave2'
         if now < self.blink_until:

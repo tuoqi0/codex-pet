@@ -31,6 +31,26 @@ class Response:
 
 
 class BackendTests(unittest.TestCase):
+    def test_quota_failure_is_tagged_and_close_failure_is_not_success(self):
+        events, finished = [], threading.Event()
+        def emit(event, data):
+            events.append((event, data))
+            if event in ('limits', 'limits_error'):
+                finished.set()
+        class Server:
+            def __init__(self, emit, executable=None): pass
+            def request(self, method, params):
+                if method == 'account/read':
+                    return {'account': {'type': 'chatgpt'}}
+                return {'rateLimits': {'primary': {'usedPercent': 25}}}
+            def close(self):
+                raise RuntimeError('无法关闭额度连接')
+        b = backend.Backend(emit, auth=FakeAuth())
+        with mock.patch.object(backend, 'AppServer', Server):
+            b.limits()
+            self.assertTrue(finished.wait(3))
+        self.assertEqual(events, [('limits_error', '无法关闭额度连接')])
+
     def test_chat_uses_oauth_and_requires_completed(self):
         events = []
         b = backend.Backend(lambda *x: events.append(x), auth=FakeAuth())
@@ -150,7 +170,7 @@ class BackendTests(unittest.TestCase):
             for _ in range(100):
                 if events: break
                 time.sleep(0.005)
-        self.assertEqual(events[-1][0], 'error')
+        self.assertEqual(events[-1][0], 'limits_error')
         self.assertIn('不会使用 API key', events[-1][1])
 
     def test_account_mismatch_fails_and_missing_email_is_unverified(self):

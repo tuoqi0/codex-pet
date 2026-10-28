@@ -2,8 +2,8 @@
 
 A desktop companion with an original dragon character and an optional Q-style
 white dragon. Both windows are independently draggable and share a conversation,
-task and quota panel. The original dragon blinks and changes greeting poses.
-Its wings and tail sway through a subtle mesh warp of the flat illustration;
+task and quota panel. The seated dragon follows the supplied reference, blinks
+and greets. Her wings and tail sway through a subtle mesh warp of the flat illustration;
 they are not independently rigged. Patrol moves the figure as a whole.
 
 ## Install or upgrade
@@ -11,7 +11,7 @@ they are not independently rigged. Patrol moves the figure as a whole.
 Build with `./build-deb.sh`. Install the resulting package with:
 
 ```sh
-sudo apt install ./dist/codex-pet_2.3.0_all.deb
+sudo apt install ./dist/codex-pet_2.4.0_all.deb
 ```
 
 Quit an already-running older version through its right-click menu before
@@ -33,17 +33,26 @@ unusable, the original dragon still runs, and the terminal shows a reason.
 
 ## Interaction
 
-- Click either character for a greeting; drag it to move it. The Q character
+- Click either character for a greeting; double-click to open the floating
+  controls with Codex quota, chat, plan, task and companion settings. Drag to
+  move it. The Q character
   plays drag and landing sequences; its animations use the catalogue's timing
   and alignment. The player keeps one Q animation source and one displayed frame at a time; the WebP decoder may use additional working memory.
 - Right-click either character to open the shared panel, view quota, change that
   character's size, hide or restore the other character, or quit. The final
   visible character cannot be hidden so the controls remain accessible.
-- The original dragon has a replay command and an optional desktop patrol. Q
+- The dragon has an optional desktop patrol. Q
   animations for work, completion and quota are connected to panel events. When
   both are visible, nearby and idle on X11, they occasionally greet each other.
   Automatic proximity interaction is disabled on Wayland, where absolute
   window positions are not reliable.
+
+Companion settings offer optional rest, water, meal and greeting reminders,
+quiet hours and a one-hour snooze. Reminders use the pet's runtime and the
+local clock; they do not monitor activity or know whether someone is working,
+drinking or eating. Weather is disabled until a city is explicitly searched
+and selected in settings. Queries go to Open-Meteo and report model time and
+source; the app does not use automatic location detection.
 
 Transparent windows require a desktop compositor; transparent portions can
 still receive clicks and a window manager can ignore always-on-top hints. On
@@ -86,5 +95,5 @@ Run `/usr/bin/python3 src/codex_pet.py`. Tests:
 QT_QPA_PLATFORM=offscreen /usr/bin/python3 src/codex_pet.py --quit-after-ms 4000
 ```
 
-The original PNG poses in `assets/` are included in the package. User-imported
-art remains outside the package and its original permissions apply.
+The generated seated-dragon PNG poses in `assets/` are included in the package.
+User-imported Q art remains outside the package and its original permissions apply.

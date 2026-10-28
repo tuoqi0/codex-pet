@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 import tarfile
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -72,22 +73,74 @@ class QPetTests(unittest.TestCase):
         pet.close()
         self.assertIsNone(pet.player.source)
 
-    def test_mouse_click_drag_and_landing(self):
-        pet = QPet(None, self.root)
+    def test_single_click_greets_after_double_click_interval(self):
+        manager = mock.Mock()
+        pet = QPet(manager, self.root)
         pet.show()
-        QTest.mouseClick(pet, Qt.LeftButton, pos=QPoint(70, 70))
-        self.assertEqual(pet.player.current, '01')
-        QTest.mousePress(pet, Qt.LeftButton, pos=QPoint(70, 70))
-        pos = QPoint(110, 100)
-        move = QMouseEvent(QEvent.MouseMove, pos, pet.mapToGlobal(pos), Qt.NoButton, Qt.LeftButton, Qt.NoModifier)
-        QApplication.sendEvent(pet, move)
-        self.assertEqual(pet.player.current, 'drag')
-        QTest.mouseRelease(pet, Qt.LeftButton, pos=pos)
-        self.assertEqual(pet.player.current, 'landing')
+        with mock.patch.object(pet.player, 'play', wraps=pet.player.play) as play:
+            QTest.mouseClick(pet, Qt.LeftButton, pos=QPoint(70, 70))
+            self.assertTrue(pet.click_timer.isActive())
+            play.assert_not_called()
+            QTest.qWait(QApplication.doubleClickInterval() + 100)
+            play.assert_any_call('01')
+            manager.open_floating.assert_not_called()
+        pet.close()
+
+    def test_double_click_opens_panel_and_cancels_single_click(self):
+        manager = mock.Mock()
+        pet = QPet(manager, self.root)
+        pet.show()
+        pos = QPoint(70, 70)
+        with mock.patch.object(pet.player, 'play', wraps=pet.player.play) as play:
+            QTest.mouseClick(pet, Qt.LeftButton, pos=pos)
+            self.assertTrue(pet.click_timer.isActive())
+            QTest.mouseDClick(pet, Qt.LeftButton, pos=pos)
+            QTest.mouseRelease(pet, Qt.LeftButton, pos=pos)
+            manager.open_floating.assert_called_once_with(pet)
+            self.assertFalse(pet.click_timer.isActive())
+            QTest.qWait(QApplication.doubleClickInterval() + 100)
+            play.assert_not_called()
+        pet.close()
+
+    def test_drag_plays_landing_without_greeting_or_opening_panel(self):
+        manager = mock.Mock()
+        pet = QPet(manager, self.root)
+        pet.show()
+        with mock.patch.object(pet.player, 'play', wraps=pet.player.play) as play:
+            QTest.mousePress(pet, Qt.LeftButton, pos=QPoint(70, 70))
+            pos = QPoint(110, 100)
+            move = QMouseEvent(QEvent.MouseMove, pos, pet.mapToGlobal(pos), Qt.NoButton, Qt.LeftButton, Qt.NoModifier)
+            QApplication.sendEvent(pet, move)
+            self.assertEqual(pet.player.current, 'drag')
+            QTest.mouseRelease(pet, Qt.LeftButton, pos=pos)
+            self.assertEqual(pet.player.current, 'landing')
+            QTest.qWait(QApplication.doubleClickInterval() + 100)
+            self.assertNotIn(mock.call('01'), play.call_args_list)
+            manager.open_floating.assert_not_called()
+        pet.close()
+
+    def test_drag_cancels_a_pending_single_click(self):
+        manager = mock.Mock()
+        pet = QPet(manager, self.root)
+        pet.show()
+        with mock.patch.object(pet.player, 'play', wraps=pet.player.play) as play:
+            start, end = QPoint(70, 70), QPoint(110, 100)
+            QTest.mouseClick(pet, Qt.LeftButton, pos=start)
+            self.assertTrue(pet.click_timer.isActive())
+            QTest.mousePress(pet, Qt.LeftButton, pos=start)
+            move = QMouseEvent(QEvent.MouseMove, end, pet.mapToGlobal(end), Qt.NoButton, Qt.LeftButton, Qt.NoModifier)
+            QApplication.sendEvent(pet, move)
+            QTest.mouseRelease(pet, Qt.LeftButton, pos=end)
+            QTest.qWait(QApplication.doubleClickInterval() + 100)
+            self.assertNotIn(mock.call('01'), play.call_args_list)
+            manager.open_floating.assert_not_called()
         pet.close()
 
     def test_companions_exchange_greetings_only_when_available(self):
+        from companion import CompanionScheduler, CompanionSettings
         manager = PetManager.__new__(PetManager)
+        manager.companion = CompanionScheduler(time.monotonic(), CompanionSettings(quiet_start='00:00', quiet_end='00:00'))
+        manager.panel = None
         manager.dragon = CodexPet(manager)
         manager.qpet = QPet(manager, self.root)
         dragon, pet = manager.dragon, manager.qpet

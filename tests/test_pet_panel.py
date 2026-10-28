@@ -2,6 +2,7 @@ import os
 import sys
 import tempfile
 import shutil
+import threading
 from unittest import mock
 import unittest
 from pathlib import Path
@@ -11,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QApplication, QLabel
+from PyQt5.QtWidgets import QApplication, QLabel, QPushButton
 import pet_panel
 from pet_panel import PetPanel
 
@@ -106,8 +107,8 @@ class PanelTests(unittest.TestCase):
     def test_installed_avatar_is_found_next_to_script(self):
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory)
-            source = Path(__file__).resolve().parents[1] / 'assets' / 'dragon-lady.png'
-            shutil.copyfile(source, target / 'dragon-lady.png')
+            source = Path(__file__).resolve().parents[1] / 'assets' / 'dragon-seated.png'
+            shutil.copyfile(source, target / 'dragon-seated.png')
             with mock.patch.object(pet_panel, '__file__', str(target / 'pet_panel.py')):
                 panel = PetPanel(backend_factory=FakeBackend)
             avatar = panel.findChild(QLabel, 'avatar')
@@ -126,6 +127,56 @@ class PanelTests(unittest.TestCase):
         self.assertIn('不可用', self.panel.limit_text.text())
         self.panel.bridge.received.emit('approval', {'id': 9, 'method': 'unknown', 'params': {}})
         self.assertEqual(self.panel.backend.calls[-1], ('approve', 9, 'decline'))
+
+    def test_quota_events_are_isolated_from_chat_and_refresh_is_coalesced(self):
+        events = []
+        self.panel.limits_changed.connect(lambda event, data: events.append((event, data)))
+        self.panel.prompt.setPlainText('你好')
+        self.panel._send()
+        before = self.panel.transcript.toPlainText()
+        self.assertTrue(self.panel.refresh_limits(include_account=False))
+        self.assertFalse(self.panel.refresh_limits(include_account=False))
+        self.assertEqual(self.panel.backend.calls.count(('limits',)), 1)
+        self.panel.bridge.received.emit('limits_error', '额度查询出错')
+        self.assertEqual(self.panel.transcript.toPlainText(), before)
+        self.assertTrue(self.panel.busy)
+        self.assertFalse(self.panel.limits_inflight)
+        self.assertEqual(events[-1], ('limits_error', '额度查询出错'))
+        self.assertIn('额度查询出错', self.panel.limit_text.text())
+        self.assertTrue(self.panel.refresh_limits(include_account=False))
+        self.panel.bridge.received.emit('error', '聊天出错')
+        self.assertTrue(self.panel.limits_inflight)
+        self.assertEqual(events[-1][0], 'loading')
+        self.panel.bridge.received.emit('limits', {'rateLimits': {'primary': {'usedPercent': 20}}})
+        self.assertFalse(self.panel.limits_inflight)
+        self.assertEqual(events[-1][0], 'limits')
+        self.assertIn('20%', self.panel.limit_text.text())
+
+    def test_quota_signal_is_delivered_to_qt_thread(self):
+        delivered = []
+        main_thread = threading.get_ident()
+        self.panel.limits_changed.connect(lambda *event: delivered.append((threading.get_ident(), event)))
+        worker = threading.Thread(target=lambda: self.panel.bridge.received.emit('limits', {}))
+        worker.start()
+        worker.join()
+        QTest.qWait(30)
+        self.assertEqual(delivered, [(main_thread, ('limits', {}))])
+
+    def test_small_quota_page_keeps_controls_reachable(self):
+        self.panel.resize(480, 580)
+        self.panel.show()
+        self.panel.tabs.setCurrentIndex(1)
+        self.panel._show_limits({'rateLimits': {
+            'primary': {'usedPercent': 27, 'windowDurationMins': 300, 'resetsAt': 1793278800},
+            'secondary': {'usedPercent': 63, 'windowDurationMins': 10080, 'resetsAt': 1793700000},
+        }})
+        QTest.qWait(30)
+        scroll = self.panel.tabs.currentWidget()
+        self.assertGreater(scroll.verticalScrollBar().maximum(), 0)
+        refresh = next(button for button in scroll.findChildren(QPushButton) if button.text() == '刷新額度')
+        scroll.ensureWidgetVisible(refresh)
+        QTest.qWait(20)
+        self.assertTrue(scroll.viewport().rect().contains(refresh.mapTo(scroll.viewport(), refresh.rect().center())))
 
 
 if __name__ == '__main__':

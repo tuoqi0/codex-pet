@@ -29,6 +29,11 @@ class BehaviorTests(unittest.TestCase):
         self.assertEqual(self.pet.message, 'hello')
         self.assertEqual(self.pet.pose(6.9), 'idle')
 
+    def test_drink_reminder_uses_tea_pose_then_returns_to_idle(self):
+        self.pet.react(4.0, '喝水', 'tea')
+        self.assertEqual(self.pet.pose(4.5), 'tea')
+        self.assertEqual(self.pet.pose(7.0), 'idle')
+
     def test_patrol_waits_then_moves_and_bounces(self):
         self.assertEqual(self.pet.tick(7.9), 0.0)
         self.assertGreater(self.pet.tick(8.0), 0.0)
@@ -50,13 +55,6 @@ class BehaviorTests(unittest.TestCase):
         self.assertEqual(self.pet.tick(100.0), 0.0)
         self.pet.set_patrol(True, 100.0)
         self.assertLessEqual(abs(self.pet.tick(200.0)), self.pet.PATROL_SPEED * .1)
-
-    def test_replay_resets_reaction_and_suspends_patrol(self):
-        self.pet.react(10.0, 'hi')
-        self.pet.replay(11.0)
-        self.assertEqual(self.pet.pose(11.0), 'idle')
-        self.assertEqual(self.pet.tick(12.0), 0.0)
-
 
 if __name__ == '__main__':
     unittest.main()

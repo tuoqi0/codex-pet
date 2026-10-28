@@ -16,44 +16,46 @@ from codex_backend import Backend
 
 
 STYLE = """
-QDialog { background: #111426; color: #e9e7fa; }
-QWidget { color: #e9e7fa; font-family: "Noto Sans CJK TC", "Noto Sans", sans-serif; font-size: 13px; }
-QFrame#hero { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #2e2858, stop:0.57 #252449, stop:1 #19334b); border: 1px solid #494675; border-radius: 16px; }
-QLabel#eyebrow { color: #c6bbff; font-size: 10px; font-weight: 700; letter-spacing: 2px; }
-QLabel#heroTitle { color: #ffffff; font-size: 20px; font-weight: 700; }
-QLabel#heroSub { color: #d1cce7; font-size: 12px; }
-QLabel#avatar { background: #e3dcfa; border: 2px solid #cbbcff; border-radius: 23px; }
+QDialog { background: #faf8fd; color: #403951; }
+QWidget { color: #403951; font-family: "Noto Sans CJK SC", "Noto Sans", sans-serif; font-size: 13px; }
+QFrame#hero { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #f2ebfb, stop:0.58 #f9f5fd, stop:1 #edf1fc); border: 1px solid #e6dcf1; border-radius: 16px; }
+QLabel#eyebrow { color: #987ab9; font-size: 10px; font-weight: 700; letter-spacing: 1px; }
+QLabel#heroTitle { color: #4c395e; font-size: 19px; font-weight: 700; }
+QLabel#heroSub { color: #80738e; font-size: 12px; }
+QLabel#avatar { background: #faf6ff; border: 2px solid #dfd1f0; border-radius: 29px; }
 QTabWidget::pane { border: 0; background: transparent; }
-QTabBar::tab { color: #aaa8c4; padding: 8px 18px; margin-right: 8px; border-bottom: 2px solid transparent; font-weight: 600; }
-QTabBar::tab:selected { color: #f8f6ff; border-bottom: 2px solid #bca6ff; }
-QTabBar::tab:hover:!selected { color: #ded6fa; }
-QFrame#card { background: #1b1d33; border: 1px solid #323550; border-radius: 12px; }
-QLabel#muted { color: #a6a7c3; font-size: 11px; }
-QLabel#sectionTitle { color: #faf8ff; font-size: 15px; font-weight: 700; }
-QLabel#notice { color: #c3c1db; font-size: 11px; }
-QLabel#status { color: #b7b5d0; padding: 4px 2px; font-size: 11px; }
-QComboBox, QPlainTextEdit { background: #14172a; color: #f1efff; border: 1px solid #44445f; border-radius: 8px; padding: 8px; selection-background-color: #735ec7; }
+QTabBar::tab { color: #8d829a; padding: 8px 18px; margin-right: 8px; border-bottom: 2px solid transparent; font-weight: 600; }
+QTabBar::tab:selected { color: #715491; border-bottom: 2px solid #ac8cd0; }
+QTabBar::tab:hover:!selected { color: #715491; }
+QFrame#card { background: #ffffff; border: 1px solid #eae5f1; border-radius: 12px; }
+QLabel#muted { color: #8b8196; font-size: 11px; }
+QLabel#sectionTitle { color: #50405f; font-size: 15px; font-weight: 700; }
+QLabel#notice { color: #7c7089; font-size: 11px; }
+QLabel#status { color: #8a7b99; padding: 4px 2px; font-size: 11px; }
+QComboBox, QPlainTextEdit { background: #f9f6fc; color: #473b55; border: 1px solid #e3d9ed; border-radius: 8px; padding: 8px; selection-background-color: #cbb5e5; }
 QComboBox { padding-right: 26px; min-height: 20px; }
 QComboBox::drop-down { width: 23px; border: 0; }
-QComboBox QAbstractItemView { background: #242640; color: #f1efff; selection-background-color: #655297; border: 1px solid #555377; }
-QComboBox:focus, QPlainTextEdit:focus { border: 1px solid #a993ff; }
-QPushButton { background: #30324e; color: #edebff; border: 1px solid #484968; border-radius: 8px; padding: 8px 13px; font-weight: 600; }
-QPushButton:hover { background: #414266; border-color: #8582ad; }
-QPushButton:pressed { background: #292b46; }
-QPushButton:disabled { color: #74758f; background: #24263a; border-color: #34364a; }
+QComboBox QAbstractItemView { background: #ffffff; color: #51415e; selection-background-color: #e9dff4; border: 1px solid #e0d3ed; }
+QComboBox:focus, QPlainTextEdit:focus { border: 1px solid #b79bd4; }
+QPushButton { background: #f3eef8; color: #655574; border: 1px solid #e8dff1; border-radius: 8px; padding: 8px 13px; font-weight: 600; }
+QPushButton:hover { background: #ebe1f4; border-color: #d5c3e6; }
+QPushButton:pressed { background: #e2d5ef; }
+QPushButton:disabled { color: #b9afc0; background: #f5f2f7; border-color: #ede8f1; }
 QPushButton#compact { padding: 4px 10px; min-height: 20px; }
-QPushButton#primary { background: #a992f0; color: #1d1932; border: 0; padding: 9px 20px; }
-QPushButton#primary:hover { background: #c2b0ff; }
-QPushButton#primary:disabled { background: #49435f; color: #a6a0b9; }
-QScrollArea#conversation { background: #15182b; border: 1px solid #30334d; border-radius: 12px; }
-QWidget#messages { background: #15182b; }
-QTextEdit#assistantBubble { color: #efedfc; background: #282b47; border: 1px solid #414562; border-radius: 12px; padding: 11px 13px; }
-QTextEdit#userBubble { color: #f8f5ff; background: #625092; border: 1px solid #8875be; border-radius: 12px; padding: 11px 13px; }
-QLabel#bubbleName { color: #aaa9ca; font-size: 10px; font-weight: 600; }
-QProgressBar { background: #121527; border: 0; border-radius: 4px; height: 8px; text-align: center; }
-QProgressBar::chunk { background: #ad96f4; border-radius: 4px; }
+QPushButton#primary { background: #a98bcf; color: white; border: 0; padding: 9px 20px; }
+QPushButton#primary:hover { background: #9978c4; }
+QPushButton#primary:disabled { background: #dcd2e8; color: #f5f1f8; }
+QScrollArea#conversation { background: #fffdfd; border: 1px solid #eae4f0; border-radius: 12px; }
+QScrollArea#limitsScroll { background: transparent; border: 0; }
+QWidget#limitsContent { background: #faf8fd; }
+QWidget#messages { background: #fffdfd; }
+QTextEdit#assistantBubble { color: #4c4056; background: #f3eef9; border: 1px solid #ebe2f3; border-radius: 12px; padding: 11px 13px; }
+QTextEdit#userBubble { color: #ffffff; background: #a88dcc; border: 1px solid #a88dcc; border-radius: 12px; padding: 11px 13px; }
+QLabel#bubbleName { color: #998ba5; font-size: 10px; font-weight: 600; }
+QProgressBar { background: #eee8f4; border: 0; border-radius: 4px; height: 8px; text-align: center; }
+QProgressBar::chunk { background: #ad91db; border-radius: 4px; }
 QScrollBar:vertical { background: transparent; width: 9px; margin: 3px; }
-QScrollBar::handle:vertical { background: #51516f; border-radius: 3px; min-height: 24px; }
+QScrollBar::handle:vertical { background: #d1c2dd; border-radius: 3px; min-height: 24px; }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 """
 
@@ -63,7 +65,7 @@ class ModeSelector(QComboBox):
         super().paintEvent(event)
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-        painter.setPen(QPen(QColor('#c8c1e7'), 1.6, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        painter.setPen(QPen(QColor('#88749a'), 1.6, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
         x, y = self.width() - 16, self.height() // 2 - 2
         painter.drawLine(x - 4, y, x, y + 4)
         painter.drawLine(x, y + 4, x + 4, y)
@@ -178,6 +180,8 @@ class _EventBridge(QObject):
 class PetPanel(QDialog):
     """One panel is shared by both pets; all widgets stay on the Qt thread."""
 
+    limits_changed = pyqtSignal(str, object)
+
     def __init__(self, action_callback=None, parent=None, backend_factory=Backend):
         super().__init__(parent)
         self.setObjectName('petPanel')
@@ -188,6 +192,7 @@ class PetPanel(QDialog):
         self.action_callback = action_callback or (lambda action: None)
         self.cwd = None
         self.busy = False
+        self.limits_inflight = False
         self.last_error = None
         self.bridge = _EventBridge(self)
         self.bridge.received.connect(self._event)
@@ -218,16 +223,17 @@ class PetPanel(QDialog):
         row.setSpacing(15)
         avatar = QLabel()
         avatar.setObjectName('avatar')
-        avatar.setFixedSize(46, 46)
+        avatar.setFixedSize(58, 58)
         avatar.setAlignment(Qt.AlignCenter)
         directory = Path(__file__).resolve().parent
-        image = directory / 'dragon-lady.png'
+        image = directory / 'dragon-seated.png'
         if not image.is_file():
-            image = directory.parent / 'assets' / 'dragon-lady.png'
+            image = directory.parent / 'assets' / 'dragon-seated.png'
         pixmap = QPixmap(str(image))
         if not pixmap.isNull():
-            portrait = pixmap.copy(int(pixmap.width() * .35), 0, int(pixmap.width() * .30), int(pixmap.width() * .30))
-            avatar.setPixmap(portrait.scaled(42, 42, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            side = int(pixmap.width() * .18)
+            portrait = pixmap.copy(int(pixmap.width() * .485), int(pixmap.height() * .015), side, side)
+            avatar.setPixmap(portrait.scaled(52, 52, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         row.addWidget(avatar)
         titles = QVBoxLayout()
         titles.setSpacing(1)
@@ -316,6 +322,7 @@ class PetPanel(QDialog):
 
     def _build_limits(self):
         page = QWidget()
+        page.setObjectName('limitsContent')
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 10, 0, 0)
         layout.setSpacing(12)
@@ -373,14 +380,19 @@ class PetPanel(QDialog):
         row = QHBoxLayout()
         refresh = QPushButton('刷新額度')
         refresh.setObjectName('primary')
-        refresh.clicked.connect(self.refresh_limits)
+        refresh.clicked.connect(lambda: self.refresh_limits())
         manage = QPushButton('管理 ChatGPT 用量')
         manage.clicked.connect(lambda: QDesktopServices.openUrl(QUrl('https://chatgpt.com/#settings/Usage')))
         row.addWidget(refresh)
         row.addWidget(manage)
         row.addStretch(1)
         layout.addLayout(row)
-        self.tabs.addTab(page, '帳戶與額度')
+        scroll = QScrollArea()
+        scroll.setObjectName('limitsScroll')
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setWidget(page)
+        self.tabs.addTab(scroll, '帳戶與額度')
 
     def open_page(self, page='chat'):
         self.tabs.setCurrentIndex(1 if page == 'limits' else 0)
@@ -394,11 +406,17 @@ class PetPanel(QDialog):
         self.status.setText('正在啟動 ChatGPT 授權…')
         self.backend.login()
 
-    def refresh_limits(self):
+    def refresh_limits(self, include_account=True):
+        if self.limits_inflight:
+            return False
+        self.limits_inflight = True
+        self.limits_changed.emit('loading', None)
         self.action_callback('quota')
         self.status.setText('正在查詢 Codex 額度…')
-        self.backend.account()
+        if include_account:
+            self.backend.account()
         self.backend.limits()
+        return True
 
     def backend_cancel(self):
         self.backend.cancel()
@@ -451,6 +469,8 @@ class PetPanel(QDialog):
                 self.last_error = str(data)
             else:
                 self.transcript.add_message('assistant', '[錯誤] ' + str(data))
+        elif event in ('account_error', 'login_error'):
+            self.status.setText(str(data))
         elif event == 'done':
             result = data if isinstance(data, dict) else {}
             if result.get('status') == 'completed':
@@ -473,7 +493,16 @@ class PetPanel(QDialog):
             target.setText(label + str(info.get('email') or info.get('type') or '不可用') +
                            '　方案：' + str(info.get('planType') or '不可用'))
         elif event == 'limits':
+            self.limits_inflight = False
             self._show_limits(data)
+            self.limits_changed.emit('limits', data)
+        elif event == 'limits_error':
+            self.limits_inflight = False
+            self.limit_text.setText('Codex 額度查詢失敗：' + str(data))
+            for widget, _, _ in self.usage_bars:
+                widget.hide()
+            self.status.setText('額度查詢失敗：' + str(data))
+            self.limits_changed.emit('limits_error', data)
         elif event == 'approval':
             self._approval(data)
 

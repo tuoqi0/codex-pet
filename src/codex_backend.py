@@ -84,7 +84,7 @@ class AppServer:
         self.mode = None
         threading.Thread(target=self._read, daemon=True).start()
         try:
-            self.request('initialize', {'clientInfo': {'name': 'codex_pet', 'title': 'Codex Pet', 'version': '2.3.0'}, 'capabilities': {'experimentalApi': True}})
+            self.request('initialize', {'clientInfo': {'name': 'codex_pet', 'title': 'Codex Pet', 'version': '2.4.0'}, 'capabilities': {'experimentalApi': True}})
             self.write({'method': 'initialized', 'params': {}})
         except Exception:
             self.close()
@@ -213,12 +213,12 @@ class Backend:
         self.history = []
         self.threads = {}
 
-    def _async(self, operation):
+    def _async(self, operation, error_event='error'):
         def run():
             try:
                 operation()
             except Exception as exc:
-                self.emit('error', str(exc))
+                self.emit(error_event, str(exc))
         threading.Thread(target=run, daemon=True).start()
 
     def login(self):
@@ -226,7 +226,7 @@ class Backend:
             self.emit('status', '请在浏览器完成 ChatGPT 授权。')
             self.auth.login()
             self.emit('account', self.auth.account())
-        self._async(run)
+        self._async(run, 'login_error')
 
     def account(self):
         def run():
@@ -237,7 +237,7 @@ class Backend:
                 self.emit('account', {'source': 'Codex', 'account': account})
             finally:
                 server.close()
-        self._async(run)
+        self._async(run, 'account_error')
 
     def limits(self):
         def run():
@@ -246,10 +246,11 @@ class Backend:
                 account = server.request('account/read', {'refreshToken': False}).get('account')
                 if not account or account.get('type') != 'chatgpt':
                     raise RuntimeError('Codex 未以 ChatGPT 账户登录；不会使用 API key。')
-                self.emit('limits', server.request('account/rateLimits/read', {}))
+                result = server.request('account/rateLimits/read', {})
             finally:
                 server.close()
-        self._async(run)
+            self.emit('limits', result)
+        self._async(run, 'limits_error')
 
     def _check_identity(self, account=None):
         chat = self.auth.account()
