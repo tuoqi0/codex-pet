@@ -120,6 +120,19 @@ class CompanionDialogTests(unittest.TestCase):
         self.assertEqual(self.saved[0].weather_label, 'Tokyo · Japan')
         self.assertEqual(self.saved[0].weather_latitude, 35.68)
 
+    def test_clearing_selection_does_not_keep_previous_search_result(self):
+        self.dialog.weather_enabled.setChecked(True)
+        self.dialog.city.setText('Dalian')
+        self.dialog._search()
+        self.weather.callback('locations', [{'name': '大连', 'latitude': 38.91, 'longitude': 121.61}])
+        self.app.processEvents()
+        self.dialog.results.setCurrentIndex(1)
+        self.assertIsNotNone(self.dialog.location)
+        self.dialog.results.setCurrentIndex(0)
+        self.assertIsNone(self.dialog.location)
+        self.dialog._save()
+        self.assertEqual(self.saved, [])
+
     def test_city_search_hints_and_explicit_selection_for_namesakes(self):
         self.dialog.weather_enabled.setChecked(True)
         self.assertIn('拼音', self.dialog.city.placeholderText())

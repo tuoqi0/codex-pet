@@ -260,6 +260,9 @@ class CompanionSettingsDialog(QDialog):
         if place is not None:
             self.location = dict(place)
             self.weather_status.setText('已选择：' + self.results.itemText(index))
+        else:
+            self.location = None
+            self.weather_status.setText('请选择搜索结果中的地点。')
 
     def _save(self):
         location = self.location

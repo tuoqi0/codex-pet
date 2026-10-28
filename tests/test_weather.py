@@ -81,6 +81,19 @@ class WeatherTests(unittest.TestCase):
         self.assertEqual(seen[1][1]['operation'], 'weather')
         self.assertEqual(get.call_count, 1)
 
+    def test_failures_explain_network_timeout_and_rate_limit(self):
+        location = {'latitude': 38.91, 'longitude': 121.61}
+        for exception, message in ((requests.Timeout(), '超时'),
+                                   (requests.ConnectionError(), '检查网络'),
+                                   (requests.HTTPError(response=requests.Response()), '返回错误')):
+            with self.subTest(error=type(exception).__name__):
+                with self.assertRaisesRegex(WeatherError, message):
+                    current_weather(location, Mock(side_effect=exception))
+        response = requests.Response()
+        response.status_code = 429
+        with self.assertRaisesRegex(WeatherError, '过于频繁'):
+            current_weather(location, Mock(side_effect=requests.HTTPError(response=response)))
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -56,5 +56,22 @@ class BehaviorTests(unittest.TestCase):
         self.pet.set_patrol(True, 100.0)
         self.assertLessEqual(abs(self.pet.tick(200.0)), self.pet.PATROL_SPEED * .1)
 
+    def test_drag_landing_and_work_drive_dragon_pose(self):
+        self.pet.begin_drag()
+        self.assertEqual(self.pet.pose(1), 'wave')
+        self.pet.end_drag(2)
+        self.assertEqual(self.pet.landed_at, 2)
+        self.pet.set_activity('work', 3)
+        self.assertEqual(self.pet.pose(3), 'work')
+        self.pet.set_activity('idle', 4)
+        self.assertEqual(self.pet.pose(4), 'idle')
+        self.pet.set_activity('celebrate', 5)
+        self.assertEqual(self.pet.pose(5), 'happy')
+        self.pet.tick(5)
+        self.assertEqual(self.pet.pose(5), 'happy')
+        self.pet.set_activity('work', 5.5)
+        self.pet.set_activity('idle', 5.8)
+        self.assertEqual(self.pet.pose(5.8), 'idle')
+
 if __name__ == '__main__':
     unittest.main()

@@ -65,9 +65,24 @@ class FloatingTests(unittest.TestCase):
         self.panel.set_error(error)
         self.assertIn(error, self.panel.state.toolTip())
         self.assertLess(len(self.panel.state.text()), 170)
-        for name in ('chat', 'plan', 'task', 'refresh', 'settings'):
+        for name in ('chat', 'plan', 'task', 'refresh', 'weather', 'settings'):
             self.panel.buttons[name].click()
-        self.assertEqual(self.actions, ['chat', 'plan', 'task', 'refresh', 'settings'])
+        self.assertEqual(self.actions, ['chat', 'plan', 'task', 'refresh', 'weather', 'settings'])
+
+    def test_weather_states_and_refresh_are_visible(self):
+        self.panel.show()
+        self.panel.set_weather('天气：正在查询…')
+        self.assertIn('正在查询', self.panel.weather.text())
+        self.assertTrue(self.panel.weather_detail.isHidden())
+        self.panel.set_weather('天气：大连 局部多云 13.6°C', 'Open-Meteo · 模型时间 2026-10-28 18:45')
+        self.assertIn('大连', self.panel.weather.text())
+        self.assertIn('模型时间', self.panel.weather_detail.text())
+        self.assertTrue(self.panel.weather_detail.isVisible())
+        self.panel.set_weather('天气：暂时不可用', '无法连接天气服务，请检查网络。')
+        self.assertIn('不可用', self.panel.weather.text())
+        self.assertIn('检查网络', self.panel.weather_detail.text())
+        self.panel.buttons['weather'].click()
+        self.assertEqual(self.actions, ['weather'])
 
     def test_placement_stays_within_available_screen(self):
         pet = QWidget()
@@ -105,6 +120,10 @@ class FloatingTests(unittest.TestCase):
             self.panel.scroll.ensureWidgetVisible(self.panel.buttons['settings'])
             QTest.qWait(20)
             button = self.panel.buttons['settings']
+            self.assertTrue(self.panel.scroll.viewport().rect().contains(button.mapTo(self.panel.scroll.viewport(), button.rect().center())))
+            self.panel.scroll.ensureWidgetVisible(self.panel.buttons['weather'])
+            QTest.qWait(20)
+            button = self.panel.buttons['weather']
             self.assertTrue(self.panel.scroll.viewport().rect().contains(button.mapTo(self.panel.scroll.viewport(), button.rect().center())))
         pet.hide()
 

@@ -31,6 +31,183 @@ class Response:
 
 
 class BackendTests(unittest.TestCase):
+    def test_login_completion_and_model_generations_are_reported(self):
+        events, ready = [], threading.Event()
+        def emit(event, data):
+            events.append((event, data))
+            if event in ('login_complete', 'models', 'models_error'):
+                ready.set()
+        auth = FakeAuth()
+        auth.login = lambda: None
+        b = backend.Backend(emit, auth=auth)
+        b.login()
+        self.assertTrue(ready.wait(2))
+        self.assertEqual(events[-1], ('login_complete', None))
+        ready.clear()
+        catalog = Response({'models': [{'slug': 'one', 'visibility': 'list'}]})
+        with mock.patch.object(backend.requests, 'get', return_value=catalog):
+            b.models('chat', generation=42)
+            self.assertTrue(ready.wait(2))
+        self.assertEqual(events[-1][1]['generation'], 42)
+        ready.clear()
+        b.models('invalid', generation=43)
+        self.assertTrue(ready.wait(2))
+        self.assertEqual(events[-1][0], 'models_error')
+        self.assertEqual(events[-1][1]['generation'], 43)
+
+    def test_model_catalogs_are_mode_specific_and_selected_model_is_used(self):
+        events, ready = [], threading.Event()
+        def emit(event, data):
+            events.append((event, data))
+            if event in ('models', 'models_error'):
+                ready.set()
+        b = backend.Backend(emit, auth=FakeAuth())
+        catalog = Response({'models': [
+            {'slug': 'one', 'display_name': 'One', 'visibility': 'list'},
+            {'slug': 'two', 'display_name': 'Two', 'visibility': 'list'},
+            {'slug': 'hidden', 'visibility': 'hide'}]})
+        stream = Response(lines=['data: ' + json.dumps({'type': 'response.completed'})])
+        with mock.patch.object(backend.requests, 'get', return_value=catalog), mock.patch.object(backend.requests, 'post', return_value=stream) as post:
+            b.models('chat')
+            self.assertTrue(ready.wait(2))
+            self.assertEqual([item['id'] for item in events[-1][1]['models']], ['one', 'two'])
+            b._chat('hi', 'two')
+            self.assertEqual(post.call_args.kwargs['json']['model'], 'two')
+            with self.assertRaisesRegex(RuntimeError, '刷新模型'):
+                b._chat('hi', 'hidden')
+
+        calls = []
+        class Server:
+            def __init__(self, *args, **kwargs): pass
+            def request(self, method, params):
+                calls.append((method, params))
+                if method == 'account/read':
+                    return {'account': {'type': 'chatgpt'}}
+                return {'data': [{'model': 'codex', 'displayName': 'Codex',
+                                  'supportedReasoningEfforts': [{'reasoningEffort': 'high'}],
+                                  'defaultReasoningEffort': 'high', 'isDefault': True}]}
+            def close(self): pass
+        ready.clear()
+        with mock.patch.object(backend, 'AppServer', Server):
+            b.models('task')
+            self.assertTrue(ready.wait(2))
+        self.assertEqual(events[-1][1]['models'][0]['efforts'], ['high'])
+        self.assertEqual([method for method, _ in calls], ['account/read', 'model/list'])
+
+    def test_codex_history_requires_selection_and_rejects_cross_directory(self):
+        events, ready, requests_seen = [], threading.Event(), []
+        def emit(event, data):
+            events.append((event, data))
+            if event in ('codex_threads', 'codex_threads_error', 'codex_thread', 'codex_thread_error'):
+                ready.set()
+        class Server:
+            def __init__(self, *args, **kwargs): self.mode = None
+            def request(self, method, params):
+                requests_seen.append((method, params))
+                if method == 'account/read': return {'account': {'type': 'chatgpt'}}
+                if method == 'thread/list': return {'data': [{'id': 'old'}], 'nextCursor': None}
+                if method == 'thread/read': return {'thread': {'id': 'old', 'cwd': '/not-the-project', 'turns': []}}
+                raise AssertionError('must not resume an unrelated session')
+            def close(self): pass
+        b = backend.Backend(emit, auth=FakeAuth())
+        with mock.patch.object(backend, 'AppServer', Server), tempfile.TemporaryDirectory() as directory:
+            b.codex_threads()
+            self.assertTrue(ready.wait(2))
+            self.assertNotIn('thread/read', [method for method, _ in requests_seen])
+            ready.clear()
+            b.codex_thread('old')
+            self.assertTrue(ready.wait(2))
+            self.assertEqual(requests_seen[-1], ('thread/read', {'threadId': 'old', 'includeTurns': True}))
+            with self.assertRaisesRegex(RuntimeError, '工作目录'):
+                b._agent('task', 'do something', directory, thread_id='old', task_sandbox='read-only')
+            self.assertNotIn('thread/resume', [method for method, _ in requests_seen])
+        b.send('chat', 'hi', None, thread_id='old')
+        self.assertIn('只能在任务模式', events[-1][1])
+
+    def test_selected_codex_session_resumes_with_selected_model_and_effort(self):
+        class Server:
+            last = None
+            def __init__(self, *args, **kwargs):
+                self.requests, self.completed_turns = [], {}
+                Server.last = self
+            def request(self, method, params):
+                self.requests.append((method, params))
+                if method == 'account/read': return {'account': {'type': 'chatgpt'}}
+                if method == 'thread/read': return {'thread': {'id': 'selected', 'cwd': directory, 'modelProvider': 'openai'}}
+                if method == 'thread/resume':
+                    return {'thread': {'id': 'selected'}, 'sandbox': {'type': 'readOnly'}, 'approvalPolicy': 'on-request'}
+                if method == 'turn/start':
+                    self.completed_turns['turn'] = {'id': 'turn', 'status': 'completed'}
+                    return {'turn': {'id': 'turn'}}
+                raise AssertionError(method)
+            def close(self): pass
+        b = backend.Backend(lambda *_: None, auth=FakeAuth())
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(backend, 'AppServer', Server):
+            self.assertEqual(b._agent('task', 'hello', directory, 'selected-model', 'high', 'selected', 'read-only'), 'completed')
+        requests = dict(Server.last.requests)
+        self.assertEqual(requests['thread/resume']['threadId'], 'selected')
+        self.assertEqual(requests['thread/resume']['sandbox'], 'read-only')
+        self.assertEqual(requests['turn/start']['model'], 'selected-model')
+        self.assertEqual(requests['turn/start']['effort'], 'high')
+        self.assertEqual(b.threads[('task', directory)], 'selected')
+
+    def test_history_resume_requires_explicit_permission_and_confirmation(self):
+        calls = []
+        class Server:
+            def __init__(self, *args, **kwargs): self.mode = None
+            def request(self, method, params):
+                calls.append(method)
+                if method == 'account/read': return {'account': {'type': 'chatgpt'}}
+                if method == 'thread/read': return {'thread': {'id': 'old', 'cwd': directory, 'modelProvider': 'openai', 'model': 'm', 'reasoningEffort': 'low'}}
+                if method == 'thread/resume':
+                    return {'thread': {'id': 'old'}, 'sandbox': {'type': 'workspaceWrite'}, 'approvalPolicy': 'on-request'}
+                raise AssertionError('must not start when selected permission was not confirmed')
+            def close(self): pass
+        b = backend.Backend(lambda *_: None, auth=FakeAuth())
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(backend, 'AppServer', Server):
+            with self.assertRaisesRegex(RuntimeError, '明确选择'):
+                b._agent('task', 'continue', directory, thread_id='old')
+            self.assertEqual(calls, [])
+            with self.assertRaisesRegex(RuntimeError, '未确认'):
+                b._agent('task', 'continue', directory, thread_id='old', task_sandbox='read-only')
+            self.assertNotIn('turn/start', calls)
+
+    def test_history_resume_does_not_silently_switch_model_or_effort(self):
+        class Server:
+            result_model, result_effort = 'old-model', 'low'
+            def __init__(self, *args, **kwargs):
+                self.completed_turns = {}
+                self.requests = []
+                Server.last = self
+            def request(self, method, params):
+                self.requests.append((method, params))
+                if method == 'account/read': return {'account': {'type': 'chatgpt'}}
+                if method == 'thread/read':
+                    return {'thread': {'id': 'old', 'cwd': directory, 'modelProvider': 'openai',
+                                       'model': 'old-model', 'reasoningEffort': 'low'}}
+                if method == 'thread/resume':
+                    return {'thread': {'id': 'old'}, 'sandbox': {'type': 'readOnly'},
+                            'approvalPolicy': 'on-request', 'model': self.result_model,
+                            'reasoningEffort': self.result_effort}
+                if method == 'turn/start':
+                    self.completed_turns['t'] = {'id': 't', 'status': 'completed'}
+                    return {'turn': {'id': 't'}}
+                raise AssertionError(method)
+            def close(self): pass
+        b = backend.Backend(lambda *_: None, auth=FakeAuth())
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(backend, 'AppServer', Server):
+            self.assertEqual(b._agent('task', 'continue', directory, thread_id='old', task_sandbox='read-only'), 'completed')
+            turn_params = dict(Server.last.requests)['turn/start']
+            self.assertNotIn('model', turn_params)
+            self.assertNotIn('effort', turn_params)
+            Server.result_model = 'other-model'
+            with self.assertRaisesRegex(RuntimeError, '模型与历史模型不一致'):
+                b._agent('task', 'continue', directory, thread_id='old', task_sandbox='read-only')
+            Server.result_model, Server.result_effort = 'old-model', 'high'
+            with self.assertRaisesRegex(RuntimeError, '推理强度与历史不一致'):
+                b._agent('task', 'continue', directory, thread_id='old', task_sandbox='read-only')
+            self.assertNotIn('turn/start', dict(Server.last.requests))
+
     def test_quota_failure_is_tagged_and_close_failure_is_not_success(self):
         events, finished = [], threading.Event()
         def emit(event, data):
@@ -100,6 +277,32 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(sent[-1]['result']['answers']['q']['answers'], ['option'])
         server.handle({'id': 11, 'method': 'unknown/request', 'params': {}})
         self.assertIn('error', sent[-1])
+
+    def test_progress_keeps_plan_and_tool_lifecycle_without_private_outputs(self):
+        events = []
+        server = object.__new__(backend.AppServer)
+        server.emit = lambda *x: events.append(x)
+        server.handle({'method': 'turn/plan/updated', 'params': {
+            'plan': [{'step': 'Inspect project', 'status': 'inProgress'}]}})
+        server.handle({'method': 'item/plan/delta', 'params': {'itemId': 'p', 'delta': 'Plan'}})
+        server.handle({'method': 'item/completed', 'params': {'item': {
+            'type': 'plan', 'id': 'p', 'text': 'Final plan'}}})
+        server.handle({'method': 'item/started', 'params': {'item': {
+            'id': 'c', 'type': 'commandExecution', 'command': 'SECRET',
+            'aggregatedOutput': 'PRIVATE', 'status': 'inProgress'}}})
+        server.handle({'method': 'item/completed', 'params': {'item': {
+            'id': 'f', 'type': 'fileChange', 'changes': [{'path': 'app.py', 'diff': 'SECRET'}],
+            'status': 'completed'}}})
+        server.handle({'method': 'model/rerouted', 'params': {
+            'fromModel': 'a', 'toModel': 'b', 'reason': 'load'}})
+        self.assertEqual(events[0][1]['steps'][0]['step'], 'Inspect project')
+        self.assertEqual(events[1][1]['kind'], 'plan_delta')
+        self.assertEqual(events[2][1]['text'], 'Final plan')
+        self.assertEqual(events[3][1]['phase'], 'started')
+        self.assertEqual(events[4][1]['detail'], 'app.py')
+        self.assertEqual(events[5][1]['to_model'], 'b')
+        self.assertNotIn('SECRET', repr(events))
+        self.assertNotIn('PRIVATE', repr(events))
 
     def test_task_rejects_api_key_before_thread_start(self):
         class Server:

@@ -99,7 +99,7 @@ class _QuotaRow(QWidget):
 
 
 class PetFloating(QWidget):
-    """Floating pet controls; callbacks receive chat/plan/task/refresh/settings."""
+    """Floating pet controls; weather and quota refresh have separate callbacks."""
 
     def __init__(self, on_action=None, parent=None):
         super().__init__(parent, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
@@ -171,11 +171,28 @@ class PetFloating(QWidget):
         usage_layout.addWidget(self.secondary)
         layout.addWidget(usage)
 
+        weather_header = QHBoxLayout()
+        weather_title = QLabel('天气')
+        weather_title.setObjectName('section')
+        weather_header.addWidget(weather_title)
+        weather_header.addStretch()
+        weather_refresh = QPushButton('刷新 ↻')
+        weather_refresh.setObjectName('small')
+        weather_refresh.setToolTip('立即查询已选地点的天气')
+        weather_refresh.clicked.connect(lambda: self.on_action('weather'))
+        weather_header.addWidget(weather_refresh)
+        layout.addLayout(weather_header)
         self.weather = QLabel('天气：未设置城市')
         self.weather.setObjectName('subtitle')
         self.weather.setWordWrap(True)
         self.weather.setToolTip('在陪伴设置中选择城市后才会查询天气。')
         layout.addWidget(self.weather)
+        self.weather_detail = QLabel('')
+        self.weather_detail.setObjectName('state')
+        self.weather_detail.setWordWrap(True)
+        self.weather_detail.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.weather_detail.hide()
+        layout.addWidget(self.weather_detail)
 
         buttons = QGridLayout()
         buttons.setSpacing(7)
@@ -189,6 +206,7 @@ class PetFloating(QWidget):
             buttons.addWidget(button, i // 2, i % 2)
             self.buttons[action] = button
         self.buttons['refresh'] = refresh
+        self.buttons['weather'] = weather_refresh
         layout.addLayout(buttons)
 
     def set_loading(self):
@@ -201,6 +219,8 @@ class PetFloating(QWidget):
     def set_weather(self, text, detail=''):
         self.weather.setText(text)
         self.weather.setToolTip(detail or text)
+        self.weather_detail.setText(detail)
+        self.weather_detail.setVisible(bool(detail))
         self._content_changed()
 
     def set_error(self, message):

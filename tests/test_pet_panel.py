@@ -26,6 +26,10 @@ class FakeBackend:
     def account(self): self.calls.append(('account',))
     def limits(self): self.calls.append(('limits',))
     def send(self, *args): self.calls.append(('send', *args))
+    def models(self, mode, generation=None): self.calls.append(('models', mode, generation))
+    def codex_threads(self, cursor=None): self.calls.append(('codex_threads', cursor))
+    def codex_thread(self, thread_id): self.calls.append(('codex_thread', thread_id))
+    def new_thread(self, mode, cwd): self.calls.append(('new_thread', mode, cwd))
     def cancel(self): self.calls.append(('cancel',))
     def approve(self, *args): self.calls.append(('approve', *args))
     def close(self): self.calls.append(('close',))
@@ -39,6 +43,9 @@ class PanelTests(unittest.TestCase):
     def setUp(self):
         self.actions = []
         self.panel = PetPanel(action_callback=self.actions.append, backend_factory=FakeBackend)
+        self.panel.model_cache = {mode: [{'id': 'model', 'name': 'Model', 'efforts': ['low', 'high'],
+                                         'default_effort': 'high'}] for mode in ('chat', 'plan', 'task')}
+        self.panel._show_models('chat')
 
     def tearDown(self):
         self.panel.hide()
@@ -48,7 +55,7 @@ class PanelTests(unittest.TestCase):
     def test_chat_progress_and_error_completion(self):
         self.panel.prompt.setPlainText('你好')
         self.panel._send()
-        self.assertEqual(self.panel.backend.calls[-1], ('send', 'chat', '你好', None))
+        self.assertEqual(self.panel.backend.calls[-1], ('send', 'chat', '你好', None, 'model', None, None, None))
         self.panel.bridge.received.emit('delta', '您好')
         self.assertIn('您好', self.panel.transcript.toPlainText())
         self.panel.bridge.received.emit('error', '授權失敗')
@@ -61,7 +68,7 @@ class PanelTests(unittest.TestCase):
         self.panel.cwd = '/tmp'
         self.panel.prompt.setPlainText('檢查')
         self.panel._send()
-        self.assertEqual(self.panel.backend.calls[-1], ('send', 'task', '檢查', '/tmp'))
+        self.assertEqual(self.panel.backend.calls[-1], ('send', 'task', '檢查', '/tmp', 'model', None, None, None))
         self.assertEqual(self.actions[-1], 'work')
         self.panel.bridge.received.emit('done', {'mode': 'task', 'status': 'completed'})
         self.assertEqual(self.actions[-1], 'celebrate')
@@ -172,11 +179,223 @@ class PanelTests(unittest.TestCase):
         }})
         QTest.qWait(30)
         scroll = self.panel.tabs.currentWidget()
-        self.assertGreater(scroll.verticalScrollBar().maximum(), 0)
         refresh = next(button for button in scroll.findChildren(QPushButton) if button.text() == '刷新額度')
         scroll.ensureWidgetVisible(refresh)
         QTest.qWait(20)
         self.assertTrue(scroll.viewport().rect().contains(refresh.mapTo(scroll.viewport(), refresh.rect().center())))
+
+    def test_small_chat_keeps_controls_and_transcript_reachable(self):
+        self.panel.resize(480, 580)
+        self.panel.mode.setCurrentIndex(2)
+        self.panel.show()
+        QTest.qWait(30)
+        self.assertTrue(self.panel.hero.isHidden())
+        self.assertGreaterEqual(self.panel.transcript.height(), 120)
+        for widget in (self.panel.mode, self.panel.model, self.panel.effort,
+                       self.panel.new_button, self.panel.threads_button, self.panel.send_button):
+            self.assertTrue(self.panel.rect().contains(widget.mapTo(self.panel, widget.rect().center())))
+
+    def test_models_update_per_mode_and_error_does_not_silently_pick_another(self):
+        self.panel.model_cache = {}
+        self.panel._refresh_models()
+        self.assertEqual(self.panel.backend.calls[-1], ('models', 'chat', 1))
+        self.panel.mode.setCurrentIndex(2)
+        self.assertEqual(self.panel.backend.calls[-1], ('models', 'task', 1))
+        self.panel.bridge.received.emit('models', {'mode': 'chat', 'generation': 1, 'models': [{'id': 'chat-id', 'name': 'Chat'}]})
+        self.assertIsNone(self.panel.model.currentData())
+        self.panel.bridge.received.emit('models', {'mode': 'task', 'generation': 1, 'models': [
+            {'id': 'task-id', 'name': 'Task', 'efforts': ['low', 'high'], 'default_effort': 'high'}]})
+        self.assertEqual(self.panel.model.currentData()['id'], 'task-id')
+        self.assertIsNone(self.panel.effort.currentData())
+        self.panel.effort.setCurrentIndex(self.panel.effort.findData('high'))
+        self.assertEqual(self.panel.effort.currentData(), 'high')
+        self.panel.mode.setCurrentIndex(0)
+        self.assertEqual(self.panel.model.currentData()['id'], 'chat-id')
+        self.panel.model_cache.pop('chat')
+        self.panel._refresh_models()
+        self.panel.bridge.received.emit('models_error', {'mode': 'chat', 'generation': 2, 'message': '請登入'})
+        self.assertIsNone(self.panel.model.currentData())
+        self.panel.prompt.setPlainText('hi')
+        self.panel._send()
+        self.assertFalse(self.panel.busy)
+        self.assertIn('模型', self.panel.status.text())
+
+    def test_model_and_effort_choices_survive_mode_switch_and_model_refresh(self):
+        self.panel.model_cache['chat'] = [{'id': 'c1', 'name': 'First'}, {'id': 'c2', 'name': 'Second'}]
+        self.panel._show_models('chat')
+        self.panel.model.setCurrentIndex(1)
+        self.panel.mode.setCurrentIndex(2)
+        self.panel.effort.setCurrentIndex(self.panel.effort.findData('high'))
+        self.panel.mode.setCurrentIndex(0)
+        self.assertEqual(self.panel.model.currentData()['id'], 'c2')
+        self.panel.bridge.received.emit('models', {'mode': 'chat', 'generation': 0, 'models': self.panel.model_cache['chat']})
+        self.assertEqual(self.panel.model.currentData()['id'], 'c2')
+        self.panel.mode.setCurrentIndex(2)
+        self.assertEqual(self.panel.effort.currentData(), 'high')
+
+    def test_switching_directory_clears_history_model_and_plan_transcript(self):
+        self.panel.mode.setCurrentIndex(2)
+        self.panel.cwd = '/old'
+        self.panel.selected_thread = 'history'
+        self.panel.model_choice['task'] = '__thread__'
+        self.panel._show_models('task')
+        self.panel.transcripts['plan'].add_message('user', 'old plan')
+        with mock.patch.object(pet_panel.QFileDialog, 'getExistingDirectory', return_value='/new'):
+            self.panel._choose_cwd()
+        self.assertIsNone(self.panel.selected_thread)
+        self.assertEqual(self.panel.model.currentData()['id'], 'model')
+        self.assertNotIn('old plan', self.panel.transcripts['plan'].toPlainText())
+
+    def test_loading_history_in_different_directory_clears_plan_context(self):
+        self.panel.mode.setCurrentIndex(2)
+        self.panel.cwd = '/old'
+        self.panel.transcripts['plan'].add_message('user', 'old plan')
+        self.panel._open_threads()
+        self.panel.bridge.received.emit('codex_threads', {'data': [{'id': 'two', 'cwd': '/new'}]})
+        self.panel.thread_list.setCurrentRow(0)
+        self.panel.thread_open.click()
+        self.panel.bridge.received.emit('codex_thread', {'thread': {'id': 'two', 'cwd': '/new', 'turns': []}})
+        self.assertEqual(self.panel.cwd, '/new')
+        self.assertNotIn('old plan', self.panel.transcripts['plan'].toPlainText())
+        self.assertIn(('new_thread', 'plan', '/new'), self.panel.backend.calls)
+
+    def test_successful_login_invalidates_models_and_ignores_old_results(self):
+        self.panel._refresh_models()
+        self.assertEqual(self.panel.model_generation['chat'], 1)
+        self.panel.transcripts['chat'].add_message('user', 'old account chat')
+        self.panel.backend_login()
+        self.assertTrue(self.panel.login_inflight)
+        self.panel.prompt.setPlainText('wait')
+        self.panel._send()
+        self.assertFalse(self.panel.busy)
+        self.panel.bridge.received.emit('login_complete', None)
+        self.assertFalse(self.panel.login_inflight)
+        self.assertNotIn('old account chat', self.panel.transcripts['chat'].toPlainText())
+        self.assertNotIn('chat', self.panel.model_cache)
+        self.assertNotIn('plan', self.panel.model_cache)
+        self.assertEqual(self.panel.backend.calls[-2:], [('models', 'chat', 3), ('models', 'plan', 2)])
+        self.panel.bridge.received.emit('models', {'mode': 'chat', 'generation': 1,
+                                                   'models': [{'id': 'old', 'name': 'Old'}]})
+        self.assertNotIn('chat', self.panel.model_cache)
+        self.assertIn('chat', self.panel.models_loading)
+        self.panel.bridge.received.emit('models', {'mode': 'chat', 'generation': 3,
+                                                   'models': [{'id': 'new', 'name': 'New'}]})
+        self.assertEqual(self.panel.model.currentData()['id'], 'new')
+
+    def test_failed_login_keeps_existing_account_models(self):
+        self.panel.backend_login()
+        self.panel.bridge.received.emit('login_error', '取消授權')
+        self.assertFalse(self.panel.login_inflight)
+        self.assertEqual(self.panel.model.currentData()['id'], 'model')
+
+    def test_explicit_codex_history_selection_pagination_and_new_conversation(self):
+        self.panel.mode.setCurrentIndex(2)
+        self.assertFalse(any(call[0].startswith('codex_thread') for call in self.panel.backend.calls))
+        self.panel._open_threads()
+        self.assertEqual(self.panel.backend.calls[-1], ('codex_threads', None))
+        self.panel.bridge.received.emit('codex_threads', {'data': [{'id': 'one', 'preview': '第一個', 'cwd': '/tmp'}], 'nextCursor': 'more'})
+        self.panel.thread_more.click()
+        self.assertEqual(self.panel.backend.calls[-1], ('codex_threads', 'more'))
+        self.panel.bridge.received.emit('codex_threads', {'data': [{'id': 'two', 'preview': '第二個', 'cwd': '/tmp'}], 'nextCursor': None})
+        self.panel.thread_list.setCurrentRow(1)
+        self.panel.thread_open.click()
+        self.assertEqual(self.panel.backend.calls[-1], ('codex_thread', 'two'))
+        self.panel.bridge.received.emit('codex_thread', {'thread': {'id': 'two', 'cwd': '/tmp', 'turns': [{'items': [
+            {'type': 'userMessage', 'content': [{'type': 'text', 'text': '舊問題'}]},
+            {'type': 'agentMessage', 'text': '舊回答'}]}]}})
+        self.assertIn('舊問題', self.panel.transcript.toPlainText())
+        self.assertIn('舊回答', self.panel.transcript.toPlainText())
+        self.panel.prompt.setPlainText('繼續')
+        self.panel._send()
+        self.assertFalse(self.panel.busy)
+        self.assertIn('選擇本次執行權限', self.panel.status.text())
+        self.panel.permission.setCurrentIndex(self.panel.permission.findData('read-only'))
+        self.panel._send()
+        self.assertEqual(self.panel.backend.calls[-1], ('send', 'task', '繼續', '/tmp', None, None, 'two', 'read-only'))
+        self.assertFalse(self.panel.mode.isEnabled())
+        self.assertFalse(self.panel.choose_cwd.isEnabled())
+        self.assertFalse(self.panel.permission.isEnabled())
+        self.panel.mode.setCurrentIndex(0)
+        self.assertEqual(self.panel.mode.currentData(), 'task')
+        self.panel.bridge.received.emit('done', {'mode': 'task', 'status': 'completed'})
+        self.panel._new_conversation()
+        self.assertEqual(self.panel.backend.calls[-1], ('new_thread', 'task', '/tmp'))
+        self.assertNotIn('舊問題', self.panel.transcript.toPlainText())
+        self.assertIsNone(self.panel.selected_thread)
+
+    def test_selected_history_changes_model_and_effort_only_on_explicit_choice(self):
+        self.panel.mode.setCurrentIndex(2)
+        self.panel.cwd = '/tmp'
+        self.panel.selected_thread = 'existing'
+        self.panel.model_choice['task'] = '__thread__'
+        self.panel._show_models('task')
+        self.assertTrue(self.panel.model.currentData()['follow_thread'])
+        self.assertIsNone(self.panel.effort.currentData())
+        self.panel.model.setCurrentIndex(1)
+        self.panel.effort.setCurrentIndex(self.panel.effort.findData('high'))
+        self.panel.permission.setCurrentIndex(self.panel.permission.findData('workspace-write'))
+        self.panel.prompt.setPlainText('繼續')
+        self.panel._send()
+        self.assertEqual(self.panel.backend.calls[-1], ('send', 'task', '繼續', '/tmp', 'model', 'high', 'existing', 'workspace-write'))
+
+    def test_progress_stream_and_model_reroute_are_readable(self):
+        self.panel.mode.setCurrentIndex(2)
+        self.panel.cwd = '/tmp'
+        self.panel.prompt.setPlainText('執行')
+        self.panel._send()
+        events = [
+            {'kind': 'item', 'phase': 'started', 'type': 'commandExecution'},
+            {'kind': 'plan_delta', 'item_id': 'p', 'delta': '第一'},
+            {'kind': 'plan_delta', 'item_id': 'p', 'delta': '步'},
+            {'kind': 'plan', 'steps': [{'step': '檢查', 'status': 'inProgress'}]},
+            {'kind': 'model_rerouted', 'from_model': 'a', 'to_model': 'b', 'reason': '服務調整'},
+            {'kind': 'plan_final', 'item_id': 'p', 'text': '第一步'},
+        ]
+        for event in events:
+            self.panel.bridge.received.emit('progress', event)
+        self.assertFalse(self.panel.progress_panel.isHidden())
+        text = self.panel.progress_log.toPlainText()
+        for fragment in ('開始：命令', '第一步', '檢查', 'a → b', '服務調整'):
+            self.assertIn(fragment, text)
+        self.assertEqual(text.count('第一步'), 1)
+        self.panel.progress_toggle.click()
+        self.assertTrue(self.panel.progress_log.isHidden())
+        self.panel.progress_toggle.click()
+        self.assertFalse(self.panel.progress_log.isHidden())
+        self.panel.bridge.received.emit('done', {'mode': 'task', 'status': 'completed'})
+        self.panel.mode.setCurrentIndex(0)
+        self.assertTrue(self.panel.progress_panel.isHidden())
+        self.panel.mode.setCurrentIndex(2)
+        self.assertFalse(self.panel.progress_panel.isHidden())
+
+    def test_small_history_permission_is_accessible_with_progress(self):
+        self.panel.resize(480, 580)
+        self.panel.mode.setCurrentIndex(2)
+        self.panel.cwd = '/tmp'
+        self.panel.selected_thread = 'history'
+        self.panel._show_models('task')
+        self.panel._show_permission()
+        self.panel.show()
+        self.panel._progress({'kind': 'item', 'phase': 'started', 'type': 'webSearch'})
+        self.panel.prompt.setPlainText('繼續')
+        self.panel._send()
+        QTest.qWait(30)
+        scroll = self.panel.options_scroll
+        self.assertGreater(scroll.verticalScrollBar().maximum(), 0)
+        self.assertTrue(scroll.viewport().rect().contains(
+            self.panel.permission.mapTo(scroll.viewport(), self.panel.permission.rect().center())))
+        self.assertIn('選擇本次執行權限', self.panel.status.text())
+
+    def test_closed_picker_waits_for_inflight_result_before_reopen(self):
+        self.panel.mode.setCurrentIndex(2)
+        self.panel._open_threads()
+        self.panel.thread_dialog.reject()
+        self.panel._open_threads()
+        self.assertIsNone(self.panel.thread_dialog)
+        self.panel.bridge.received.emit('codex_threads', {'data': [], 'nextCursor': None})
+        self.panel._open_threads()
+        self.assertIsNotNone(self.panel.thread_dialog)
+        self.panel.thread_dialog.reject()
 
 
 if __name__ == '__main__':

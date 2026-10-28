@@ -27,6 +27,7 @@ class FakeBackend:
         self.emit = emit
         self.limits = mock.Mock()
         self.account = mock.Mock()
+        self.models = mock.Mock()
         self.close = mock.Mock()
 
 
@@ -148,6 +149,54 @@ class ManagerIntegrationTests(unittest.TestCase):
                     self.assertEqual(manager.dragon.behavior.message, '')
                     self.assertEqual(manager.qpet.player.current, 'idle')
 
+    def test_user_greeting_gets_a_reply_from_other_nearby_pet(self):
+        manager = self.manager
+        manager.dragon.move(20, 100)
+        manager.qpet.move(260, 100)
+        manager.dragon.react('你好')
+        with mock.patch.object(codex_pet.QTimer, 'singleShot') as delayed:
+            manager.on_user_greet(manager.dragon)
+            delayed.call_args.args[1]()
+            self.assertEqual(manager.qpet.message, '我也在，和你一起！')
+        manager.qpet.player.play('idle')
+        manager.dragon.behavior.reaction_until = 0
+        manager.qpet.respond('你好', '01')
+        with mock.patch.object(codex_pet.QTimer, 'singleShot') as delayed:
+            manager.on_user_greet(manager.qpet)
+            delayed.call_args.args[1]()
+            self.assertEqual(manager.dragon.behavior.message, '我也在這裡陪你。')
+
+    def test_quota_does_not_interrupt_work_animation(self):
+        manager = self.manager
+        manager.play_action('work')
+        self.assertEqual(manager.dragon.behavior.activity, 'work')
+        with mock.patch.object(manager.qpet.player, 'play') as play:
+            manager.play_action('quota')
+            play.assert_not_called()
+        self.assertEqual(manager.dragon.behavior.activity, 'work')
+        manager.play_action('celebrate')
+        self.assertEqual(manager.dragon.behavior.activity, 'idle')
+        self.assertEqual(manager.dragon.behavior.pose(codex_pet.time.monotonic()), 'happy')
+
+    def test_floating_weather_action_starts_manual_refresh(self):
+        manager = self.manager
+        manager.open_floating(manager.dragon)
+        manager._floating_action('weather')
+        self.assertIn('选择城市', manager.weather_text)
+        manager._save_settings(companion.CompanionSettings(weather_enabled=True,
+            weather_label='Dalian', weather_latitude=38.91, weather_longitude=121.61))
+        manager._floating_action('weather')
+        self.assertEqual(len(self.fake_weather.requests), 1)
+        self.assertIn('正在查询', manager.weather_text)
+        manager._floating_action('weather')
+        self.assertIn('正在查询', manager.weather_text)
+        self.assertEqual(len(self.fake_weather.requests), 1)
+        self.fake_weather.requests[-1][1]('weather', {'description': '晴', 'temperature': 18,
+            'temperature_unit': '°C', 'source': 'Open-Meteo', 'time': '2026-10-28T12:00', 'timezone': 'Asia/Shanghai'})
+        self.app.processEvents()
+        self.assertIn('晴', manager.weather_text)
+        self.assertIn('Open-Meteo', manager.weather_detail)
+
     def test_companion_event_dispatches_to_both_or_q_alone(self):
         manager = self.manager
         event = companion.CompanionEvent('water', '记得喝水。', 'water')
@@ -223,7 +272,7 @@ class ManagerIntegrationTests(unittest.TestCase):
         self.assertEqual(manager.weather_detail, '网络不可用')
         self.assertFalse(manager.weather_inflight)
 
-    def test_pause_stops_weather_poll_and_late_weather_speech(self):
+    def test_pause_keeps_weather_data_fresh_without_late_weather_speech(self):
         manager = self.manager
         settings = companion.CompanionSettings(weather_enabled=True, weather_label='Paris',
                                                weather_latitude=48.86, weather_longitude=2.35,
@@ -240,7 +289,27 @@ class ManagerIntegrationTests(unittest.TestCase):
         self.assertFalse(manager.qpet.speech.isVisible())
         self.assertIn('晴天', manager.weather_text)
         manager.companion_tick()
+        self.assertEqual(len(self.fake_weather.requests), 2)
+        self.assertFalse(manager.refresh_weather())  # coalesces concurrent requests
+
+    def test_weather_refresh_ignores_quiet_hours_disabled_reminders_and_busy(self):
+        manager = self.manager
+        settings = companion.CompanionSettings(enabled=False, weather_enabled=True,
+            weather_label='Dalian', weather_latitude=38.91, weather_longitude=121.61,
+            quiet_start='00:00', quiet_end='23:59')
+        manager._save_settings(settings)
+        manager.weather_due = 0
+        manager._ensure_panel().busy = True
+        manager.companion_tick()
         self.assertEqual(len(self.fake_weather.requests), 1)
+        self.fake_weather.requests[-1][1]('error', {'message': '网络不可用'})
+        self.app.processEvents()
+        self.assertEqual(manager.weather_text, '天气：暂时不可用')
+        self.assertGreater(manager.weather_due, codex_pet.time.monotonic() + 250)
+        manager.companion_tick()
+        self.assertEqual(len(self.fake_weather.requests), 1)
+        self.assertTrue(manager.refresh_weather())
+        self.assertEqual(len(self.fake_weather.requests), 2)
 
     def test_reminder_and_weather_use_complete_bubbles_and_hide_with_pets(self):
         manager = self.manager

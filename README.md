@@ -2,8 +2,9 @@
 
 A desktop companion with an original dragon character and an optional Q-style
 white dragon. Both windows are independently draggable and share a conversation,
-task and quota panel. The seated dragon follows the supplied reference, blinks
-and greets. Her wings and tail sway through a subtle mesh warp of the flat illustration;
+task and quota panel. The seated dragon follows the supplied reference, blinks,
+greets, reacts happily, drinks tea and reads while working. Her wings and tail
+sway through a mesh warp of the flat illustration;
 they are not independently rigged. Patrol moves the figure as a whole.
 
 ## Install or upgrade
@@ -11,7 +12,7 @@ they are not independently rigged. Patrol moves the figure as a whole.
 Build with `./build-deb.sh`. Install the resulting package with:
 
 ```sh
-sudo apt install ./dist/codex-pet_2.4.0_all.deb
+sudo apt install ./dist/codex-pet_2.5.0_all.deb
 ```
 
 Quit an already-running older version through its right-click menu before
@@ -43,7 +44,8 @@ unusable, the original dragon still runs, and the terminal shows a reason.
   visible character cannot be hidden so the controls remain accessible.
 - The dragon has an optional desktop patrol. Q
   animations for work, completion and quota are connected to panel events. When
-  both are visible, nearby and idle on X11, they occasionally greet each other.
+  both are visible, nearby and idle on X11, they occasionally greet each other
+  and can respond to a user greeting the other character.
   Automatic proximity interaction is disabled on Wayland, where absolute
   window positions are not reliable.
 
@@ -52,7 +54,9 @@ quiet hours and a one-hour snooze. Reminders use the pet's runtime and the
 local clock; they do not monitor activity or know whether someone is working,
 drinking or eating. Weather is disabled until a city is explicitly searched
 and selected in settings. Queries go to Open-Meteo and report model time and
-source; the app does not use automatic location detection.
+source; the app does not use automatic location detection. The floating panel
+offers manual weather refresh. Quiet hours suppress spoken prompts, not weather
+data refreshes.
 
 Transparent windows require a desktop compositor; transparent portions can
 still receive clicks and a window manager can ignore always-on-top hints. On
@@ -76,8 +80,16 @@ Click **登入 ChatGPT** to authorize this application in a browser. Credentials
 are stored in `~/.config/codex-pet/` with owner-only file permissions, separate
 from Codex's own credentials. If available, email addresses are compared; a
 mismatch is rejected. An absent email or unverified workspace is reported, not
-treated as a verified match. Models for the authorized route are obtained from
-the account's model catalog; the first visible model is currently selected.
+treated as a verified match. The panel lists models returned for each route and
+offers supported reasoning levels for Codex task models.
+
+In task mode, **選擇 Codex 對話** lists local Codex sessions on request. Select a
+session to read its messages, then explicitly choose the permissions for the
+next turn before continuing. The app checks the returned sandbox and approval
+policy; it does not infer the old session's permissions. Avoid running two
+clients on the same session at once. ChatGPT authorization does not grant access
+to ChatGPT web conversation history, so ordinary chat cannot synchronize that
+history. Ordinary chat, plan and task retain separate contexts.
 
 All three routes use ChatGPT plan access; none silently falls back to an API
 key. Plan usage may share Codex or application limits, and purchased ChatGPT

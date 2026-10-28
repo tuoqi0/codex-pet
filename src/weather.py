@@ -33,8 +33,19 @@ def _get_json(url, params, get):
         response = get(url, params=params, timeout=TIMEOUT)
         response.raise_for_status()
         body = response.json()
-    except (requests.RequestException, ValueError) as exc:
+    except requests.Timeout as exc:
+        raise WeatherError('天气查询超时，请检查网络后重试。') from exc
+    except requests.ConnectionError as exc:
+        raise WeatherError('无法连接天气服务，请检查网络或代理设置后重试。') from exc
+    except requests.HTTPError as exc:
+        status = exc.response.status_code if exc.response is not None else None
+        if status == 429:
+            raise WeatherError('天气服务请求过于频繁，请稍后重试。') from exc
+        raise WeatherError('天气服务返回错误，请稍后重试。') from exc
+    except requests.RequestException as exc:
         raise WeatherError('天气服务暂时不可用，请稍后重试。') from exc
+    except ValueError as exc:
+        raise WeatherError('天气服务返回了无效数据。') from exc
     if not isinstance(body, dict) or body.get('error'):
         raise WeatherError('天气服务返回了无效数据。')
     return body

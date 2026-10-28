@@ -38,13 +38,13 @@ def motion_frames(path):
 
         def point(x, y):
             nx, ny = x / width, y / height
-            wing = max(0.0, (.34 - nx) / .34, (nx - .66) / .34)
+            wing = max(0.0, (.375 - nx) / .375, (nx - .66) / .34)
             wing *= math.sin(math.pi * (ny - .12) / .34) if .12 < ny < .46 else 0
             tail = max(0.0, (nx - .70) / .30)
             tail *= math.sin(math.pi * (ny - .48) / .46) if .48 < ny < .94 else 0
-            return (x + width * .012 * tail * math.sin(phase + .8),
-                    y + height * .018 * wing * math.sin(phase)
-                    + height * .008 * tail * math.sin(phase + .8))
+            return (x + width * .055 * tail * math.sin(phase + .8),
+                    y + height * .10 * wing * math.sin(phase)
+                    + height * .035 * tail * math.sin(phase + .8))
 
         mesh = []
         xs = [round(width * n / 16) for n in range(17)]
@@ -74,7 +74,9 @@ class CodexPet(QWidget):
         self.speech = SpeechBubble()
         self.scale_factor = 0.63
         self.frames = {}
-        for pose, filename in (('idle', 'dragon-seated.png'), ('blink', 'dragon-seated-blink.png'), ('wave', 'dragon-seated-wave.png'), ('tea', 'dragon-seated-tea.png')):
+        for pose, filename in (('idle', 'dragon-seated.png'), ('blink', 'dragon-seated-blink.png'),
+                               ('wave', 'dragon-seated-wave.png'), ('tea', 'dragon-seated-tea.png'),
+                               ('happy', 'dragon-seated-happy.png'), ('work', 'dragon-seated-work.png')):
             self.frames[pose] = motion_frames(asset_path(filename))
         self.frames['wave2'] = self.frames['wave']
         self.setWindowTitle('Codex Pet')
@@ -90,7 +92,7 @@ class CodexPet(QWidget):
         self.drag_moved = False
         self.click_timer = QTimer(self)
         self.click_timer.setSingleShot(True)
-        self.click_timer.timeout.connect(self.react)
+        self.click_timer.timeout.connect(self.greet)
         self.x_remainder = 0.0
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.advance)
@@ -182,6 +184,11 @@ class CodexPet(QWidget):
             self.speech.show_message(message, self)
         self.update()
 
+    def greet(self):
+        self.react(pose='happy')
+        if self.manager:
+            self.manager.on_user_greet(self)
+
     def hideEvent(self, event):
         self.speech.hide()
         super().hideEvent(event)
@@ -201,6 +208,17 @@ class CodexPet(QWidget):
         p.setRenderHint(QPainter.Antialiasing)
         p.setRenderHint(QPainter.SmoothPixmapTransform)
         p.scale(self.scale_factor, self.scale_factor)
+
+        # A held pet tilts and floats, then settles after release. This is a
+        # single opaque illustration, so drag never produces a ghosted face.
+        if self.behavior.dragging:
+            p.translate(self.WIDTH / 2, self.HEIGHT / 2)
+            p.rotate(4.0 * math.sin(now * 5.0))
+            p.translate(-self.WIDTH / 2, -self.HEIGHT / 2 - 8)
+        elif self.behavior.landed_at is not None:
+            elapsed = now - self.behavior.landed_at
+            if 0 <= elapsed < .65:
+                p.translate(0, -12 * math.sin(math.pi * elapsed / .65))
 
         pose = self.behavior.pose(now)
         frame = self.frames[pose][int(now / .2) % 12]
@@ -239,7 +257,7 @@ class QPet(QWidget):
         self.drag_moved = False
         self.click_timer = QTimer(self)
         self.click_timer.setSingleShot(True)
-        self.click_timer.timeout.connect(lambda: self.player.play('01'))
+        self.click_timer.timeout.connect(self.greet)
         self.message = ''
         self.message_until = 0.0
         self.player = SpritePlayer(root, self)
@@ -278,6 +296,13 @@ class QPet(QWidget):
             duration = self.speech.show_message(message, self) if self.isVisible() else 0
             self.message_until = time.monotonic() + duration / 1000
             self.update()
+
+    def greet(self):
+        # The first catalogue entry is available even in minimal installs.
+        import random
+        self.respond(random.choice(('我在这里陪你！', '摸摸头，开心！', '今天一起加油呀。', '要不要休息一会儿？')))
+        if self.manager:
+            self.manager.on_user_greet(self)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -440,11 +465,27 @@ class PetManager:
                 QTimer.singleShot(900, q_reply)
         if self.qpet:
             self.q_idle.tick(now, self.qpet.isVisible() and self._available(), self.qpet.player)
-        if (self.companion.settings.enabled and self.companion.settings.weather_enabled
-                and now >= self.companion.paused_until
-                and self._available() and not self.companion._quiet(datetime.now())
-                and now >= self.weather_due and not self.weather_inflight):
-            self._request_weather()
+        # Weather data is a dashboard query, not a proactive interruption.
+        # Quiet hours, pause and active work only suppress spoken reminders.
+        if self.companion.settings.weather_enabled and now >= self.weather_due and not self.weather_inflight:
+            self.refresh_weather()
+
+    def refresh_weather(self):
+        """Start a weather refresh if configured; return whether one started."""
+        if self.weather_inflight:
+            return False
+        if not self.companion.settings.weather_enabled:
+            self.weather_text = '天气：请在陪伴设置选择城市'
+            self.weather_detail = ''
+            if self.floating:
+                self.floating.set_weather(self.weather_text, self.weather_detail)
+            return False
+        self.weather_text = '天气：正在查询…'
+        self.weather_detail = ''
+        if self.floating:
+            self.floating.set_weather(self.weather_text, self.weather_detail)
+        self._request_weather()
+        return True
 
     def _request_weather(self):
         settings = self.companion.settings
@@ -475,6 +516,7 @@ class PetManager:
         else:
             self.weather_text = '天气：暂时不可用'
             self.weather_detail = str(data.get('message', '天气查询失败'))
+            self.weather_due = time.monotonic() + 5 * 60
         if self.floating:
             self.floating.set_weather(self.weather_text, self.weather_detail)
 
@@ -531,6 +573,8 @@ class PetManager:
     def _floating_action(self, action):
         if action == 'refresh':
             self._ensure_panel().refresh_limits(include_account=False)
+        elif action == 'weather':
+            self.refresh_weather()
         elif action == 'settings':
             self.open_settings()
         elif action in ('chat', 'plan', 'task'):
@@ -539,7 +583,7 @@ class PetManager:
             self.floating.hide()
             self.open_panel('chat')
 
-    def interaction_ready(self, allow_dragon_reaction=False):
+    def interaction_ready(self, allow_dragon_reaction=False, allow_q_reaction=False):
         dragon, qpet = self.dragon, self.qpet
         # Qt cannot reliably establish absolute window positions on Wayland.
         if (not self.companion.settings.enabled or self.companion._quiet(datetime.now())
@@ -547,13 +591,31 @@ class PetManager:
                 or (self.panel and self.panel.busy)
                 or not qpet or dragon.wayland or qpet.wayland or not dragon.isVisible()
                 or not qpet.isVisible() or dragon.press_global is not None
-                or qpet.press_global is not None or qpet.player.current != 'idle'
+                or qpet.press_global is not None
+                or qpet.player.current not in (('idle', '01') if allow_q_reaction else ('idle',))
                 or (not allow_dragon_reaction and time.monotonic() < dragon.behavior.reaction_until)):
             return False
         a, b = dragon.frameGeometry(), qpet.frameGeometry()
         dx = max(a.left() - b.right() - 1, b.left() - a.right() - 1, 0)
         dy = max(a.top() - b.bottom() - 1, b.top() - a.bottom() - 1, 0)
         return math.hypot(dx, dy) <= 200
+
+    def on_user_greet(self, source):
+        """Let the other nearby companion join a user's greeting once."""
+        if not self.interaction_ready(allow_dragon_reaction=source is self.dragon,
+                                      allow_q_reaction=source is self.qpet):
+            return
+        self.next_interaction = time.monotonic() + self.dragon.behavior.rng.uniform(35.0, 55.0)
+        message = self.dragon.behavior.message if source is self.dragon else self.qpet.message
+
+        def reply_if_ready():
+            if source is self.dragon:
+                if self.dragon.behavior.message == message and self.interaction_ready(allow_dragon_reaction=True):
+                    self.qpet.respond('我也在，和你一起！')
+            elif (self.qpet.message == message and self.interaction_ready(allow_q_reaction=True)):
+                self.dragon.react('我也在這裡陪你。')
+
+        QTimer.singleShot(1200, reply_if_ready)
 
     def maybe_interact(self):
         now = time.monotonic()
@@ -562,18 +624,22 @@ class PetManager:
         if not self.interaction_ready():
             self.next_interaction = now + 10.0
             return
-        greeting, reply = self.dragon.behavior.rng.choice((
-            ('小白龍，一起加油！', '好呀，一起！'),
-            ('今天也有你陪伴呢。', '我在這裡！'),
-            ('準備好一起出發了嗎？', '準備好了！'),
+        greeting, reply, pose, animation = self.dragon.behavior.rng.choice((
+            ('小白龍，一起加油！', '好呀，一起！', 'wave', '01'),
+            ('今天也有你陪伴呢。', '我在這裡！', 'happy', '20'),
+            ('準備好一起出發了嗎？', '準備好了！', 'wave', '04'),
+            ('小白龍，我們一起陪伴主人吧。', '嗯！今天也要開開心心。', 'wave', '25'),
+            ('累的時候可以歇一歇哦。', '我們一起休息吧！', 'tea', '14'),
+            ('小白龍，你今天心情如何？', '看到大家就很開心！', 'happy', '20'),
+            ('我們給主人一點鼓勵吧。', '你已經做得很好啦！', 'wave', '01'),
         ))
-        self.dragon.react(greeting)
+        self.dragon.react(greeting, pose)
         self.next_interaction = now + self.dragon.behavior.rng.uniform(35.0, 55.0)
 
         def reply_if_ready():
             if (self.dragon.behavior.message == greeting
                     and self.interaction_ready(allow_dragon_reaction=True)):
-                self.qpet.respond(reply)
+                self.qpet.respond(reply, animation if animation in self.qpet.player.entries else '01')
 
         QTimer.singleShot(900, reply_if_ready)
 
@@ -597,6 +663,12 @@ class PetManager:
             menu.addAction('Wayland 下定位及置頂取決於桌面').setEnabled(False)
 
     def play_action(self, action):
+        # A quota refresh can happen while a turn is running. Keep both pets
+        # working instead of interrupting their animation with a quota lookup.
+        if action == 'quota' and self.dragon.behavior.activity == 'work':
+            return
+        self.dragon.behavior.set_activity(action, time.monotonic())
+        self.dragon.update()
         if self.qpet:
             ident = {'work': 'work02', 'celebrate': '18', 'quota': 'quota'}.get(action, 'idle')
             self.qpet.player.play(ident)

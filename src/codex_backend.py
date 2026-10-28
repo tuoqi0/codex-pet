@@ -84,7 +84,7 @@ class AppServer:
         self.mode = None
         threading.Thread(target=self._read, daemon=True).start()
         try:
-            self.request('initialize', {'clientInfo': {'name': 'codex_pet', 'title': 'Codex Pet', 'version': '2.4.0'}, 'capabilities': {'experimentalApi': True}})
+            self.request('initialize', {'clientInfo': {'name': 'codex_pet', 'title': 'Codex Pet', 'version': '2.5.0'}, 'capabilities': {'experimentalApi': True}})
             self.write({'method': 'initialized', 'params': {}})
         except Exception:
             self.close()
@@ -150,13 +150,41 @@ class AppServer:
             self.completed_turns[turn.get('id')] = turn
         elif method == 'item/agentMessage/delta':
             self.emit('delta', params.get('delta', ''))
+        elif method == 'item/plan/delta':
+            self.emit('progress', {'kind': 'plan_delta', 'item_id': params.get('itemId'),
+                                   'delta': params.get('delta', '')})
+        elif method == 'turn/plan/updated':
+            self.emit('progress', {'kind': 'plan', 'steps': params.get('plan', []),
+                                   'explanation': params.get('explanation')})
+        elif method == 'model/rerouted':
+            self.emit('progress', {'kind': 'model_rerouted', 'from_model': params.get('fromModel'),
+                                   'to_model': params.get('toModel'), 'reason': params.get('reason')})
         elif method == 'account/rateLimits/updated':
             self.emit('status', 'Codex 额度已更新，请刷新额度面板。')
         elif method in ('item/started', 'item/completed'):
             item = params.get('item', {})
             kind = item.get('type', '')
-            if kind in ('commandExecution', 'fileChange', 'webSearch'):
-                self.emit('status', 'Codex: ' + kind)
+            if kind == 'plan' and method == 'item/completed':
+                self.emit('progress', {'kind': 'plan_final', 'item_id': item.get('id'),
+                                       'text': item.get('text', '')})
+            elif kind in ('commandExecution', 'fileChange', 'webSearch', 'mcpToolCall',
+                           'dynamicToolCall', 'contextCompaction'):
+                # Do not relay command output, patch contents, or tool arguments into
+                # the always-visible progress display; approvals retain full details.
+                detail = ''
+                if kind == 'fileChange':
+                    changes = item.get('changes') or []
+                    paths = [str(change['path']) for change in changes
+                             if isinstance(change, dict) and change.get('path')]
+                    detail = '\n'.join(paths[:20])
+                    if len(paths) > 20:
+                        detail += '\n…'
+                elif kind == 'mcpToolCall':
+                    detail = ' / '.join(str(item[key]) for key in ('server', 'tool') if item.get(key))
+                self.emit('progress', {'kind': 'item',
+                                       'phase': 'started' if method == 'item/started' else 'completed',
+                                       'item_id': item.get('id'), 'type': kind,
+                                       'status': item.get('status'), 'detail': detail})
         return method
 
     def approve(self, request_id, decision):
@@ -226,6 +254,7 @@ class Backend:
             self.emit('status', '请在浏览器完成 ChatGPT 授权。')
             self.auth.login()
             self.emit('account', self.auth.account())
+            self.emit('login_complete', None)
         self._async(run, 'login_error')
 
     def account(self):
@@ -276,9 +305,107 @@ class Backend:
             raise RuntimeError('ChatGPT 授权账户与 Codex 登录账户不一致；请在 Codex 或桌宠中重新登录同一账户。')
         self.emit('status', 'ChatGPT 与 Codex 的账户邮箱一致；工作空间是否一致未验证。')
 
-    def send(self, mode, text, cwd):
+    def models(self, mode, generation=None):
+        """List the selected mode's models without switching its credentials."""
+        if mode not in ('chat', 'plan', 'task'):
+            self.emit('models_error', {'mode': mode, 'generation': generation, 'message': '请选择有效模式。'})
+            return
+
+        def run():
+            try:
+                if mode in ('chat', 'plan'):
+                    entries = self._chatgpt_models(self.auth.token())
+                    models = [{'id': entry['slug'],
+                               'name': entry.get('display_name') or entry['slug']}
+                              for entry in entries]
+                else:
+                    server = AppServer(self.emit, executable=self.executable)
+                    try:
+                        account = server.request('account/read', {'refreshToken': False}).get('account')
+                        if not account or account.get('type') != 'chatgpt':
+                            raise RuntimeError('Codex 未以 ChatGPT 账户登录；不会使用 API key。')
+                        models, cursor = [], None
+                        while True:
+                            params = {'limit': 100, 'includeHidden': False}
+                            if cursor:
+                                params['cursor'] = cursor
+                            result = server.request('model/list', params)
+                            for entry in result.get('data', []):
+                                if not entry.get('hidden') and (entry.get('model') or entry.get('id')):
+                                    model_id = entry.get('model') or entry['id']
+                                    models.append({'id': model_id,
+                                                   'name': entry.get('displayName') or model_id,
+                                                   'efforts': [item['reasoningEffort'] for item in entry.get('supportedReasoningEfforts', []) if item.get('reasoningEffort')],
+                                                   'default_effort': entry.get('defaultReasoningEffort'),
+                                                   'default': bool(entry.get('isDefault'))})
+                            cursor = result.get('nextCursor')
+                            if not cursor:
+                                break
+                    finally:
+                        server.close()
+                if not models:
+                    raise RuntimeError('账户没有返回可选择的模型。')
+                self.emit('models', {'mode': mode, 'generation': generation, 'models': models})
+            except Exception as exc:
+                self.emit('models_error', {'mode': mode, 'generation': generation, 'message': str(exc)})
+        threading.Thread(target=run, daemon=True).start()
+
+    @staticmethod
+    def _chatgpt_models(token):
+        response = requests.get(RESOURCE + '/models', headers={'Authorization': 'Bearer ' + token}, timeout=30)
+        response.raise_for_status()
+        models = [entry for entry in response.json().get('models', [])
+                  if entry.get('visibility') == 'list' and entry.get('slug')]
+        if not models:
+            raise RuntimeError('ChatGPT 账户没有返回可用模型。')
+        return models
+
+    def codex_threads(self, cursor=None):
+        """List local Codex sessions only after the user opens the session picker."""
+        def run():
+            server = AppServer(self.emit, executable=self.executable)
+            try:
+                account = server.request('account/read', {'refreshToken': False}).get('account')
+                if not account or account.get('type') != 'chatgpt':
+                    raise RuntimeError('Codex 未以 ChatGPT 账户登录；不会使用 API key。')
+                params = {'limit': 50, 'sourceKinds': ['cli', 'vscode', 'appServer']}
+                if cursor:
+                    params['cursor'] = cursor
+                result = server.request('thread/list', params)
+            finally:
+                server.close()
+            self.emit('codex_threads', result)
+        self._async(run, 'codex_threads_error')
+
+    def codex_thread(self, thread_id):
+        """Read history only after the user explicitly chooses that session."""
+        def run():
+            if not thread_id:
+                raise RuntimeError('请选择 Codex 对话。')
+            server = AppServer(self.emit, executable=self.executable)
+            try:
+                account = server.request('account/read', {'refreshToken': False}).get('account')
+                if not account or account.get('type') != 'chatgpt':
+                    raise RuntimeError('Codex 未以 ChatGPT 账户登录；不会使用 API key。')
+                result = server.request('thread/read', {'threadId': thread_id, 'includeTurns': True})
+            finally:
+                server.close()
+            self.emit('codex_thread', result)
+        self._async(run, 'codex_thread_error')
+
+    def new_thread(self, mode, cwd):
+        """Forget the active local mapping; existing Codex history is retained."""
+        if mode in ('plan', 'task') and cwd:
+            self.threads.pop((mode, str(Path(cwd).expanduser().resolve())), None)
+        elif mode == 'chat':
+            self.history = []
+
+    def send(self, mode, text, cwd, model=None, effort=None, thread_id=None, task_sandbox=None):
         if mode not in ('chat', 'plan', 'task') or not text.strip():
             self.emit('error', '请选择有效模式并输入内容。')
+            return
+        if thread_id and mode != 'task':
+            self.emit('error', 'Codex 对话只能在任务模式中继续；计划和普通对话使用独立授权。')
             return
         with self.active_lock:
             if self.active is not None:
@@ -295,10 +422,10 @@ class Backend:
                     status = 'interrupted'
                     return
                 if mode == 'chat':
-                    self._chat(text)
+                    self._chat(text, model)
                     status = 'completed'
                 else:
-                    status = self._agent(mode, text, cwd)
+                    status = self._agent(mode, text, cwd, model, effort, thread_id, task_sandbox)
                 if self.cancelled.is_set():
                     status = 'interrupted'
             except Exception as exc:
@@ -313,19 +440,18 @@ class Backend:
                 self.emit('done', {'mode': mode, 'status': status})
         threading.Thread(target=run, daemon=True).start()
 
-    def _chat(self, text):
+    def _chat(self, text, model=None):
         token = self.auth.token()
         headers = {'Authorization': 'Bearer ' + token}
-        models_response = requests.get(RESOURCE + '/models', headers=headers, timeout=30)
-        models_response.raise_for_status()
-        models = [m for m in models_response.json().get('models', []) if m.get('visibility') == 'list']
-        if not models:
-            raise RuntimeError('ChatGPT 账户没有返回可用模型。')
+        models = self._chatgpt_models(token)
+        available = {entry['slug'] for entry in models}
+        if model is not None and model not in available:
+            raise RuntimeError('所选模型已不在当前 ChatGPT 账户列表中，请刷新模型。')
         if self.cancelled.is_set():
             return
         inputs = self.history + [{'role': 'user', 'content': text}]
         response = requests.post(RESOURCE + '/responses', headers=headers,
-            json={'model': models[0]['slug'], 'input': inputs, 'store': False, 'stream': True},
+            json={'model': model or models[0]['slug'], 'input': inputs, 'store': False, 'stream': True},
             stream=True, timeout=(30, 30))
         self.response = response
         response.raise_for_status()
@@ -358,7 +484,9 @@ class Backend:
             raise RuntimeError('ChatGPT 流未完整结束，请重试。')
         self.history = inputs + [{'role': 'assistant', 'content': ''.join(answer)}]
 
-    def _agent(self, mode, text, cwd):
+    def _agent(self, mode, text, cwd, model=None, effort=None, thread_id=None, task_sandbox=None):
+        if thread_id and task_sandbox not in ('read-only', 'workspace-write'):
+            raise RuntimeError('无法可靠继承历史会话的原有权限，请明确选择本次运行的只读或工作区写入权限。')
         directory = Path(cwd).expanduser().resolve()
         if not directory.is_dir():
             raise RuntimeError('请选择有效的工作目录。')
@@ -382,20 +510,46 @@ class Backend:
                       'approvalsReviewer': 'user', 'sandbox': 'read-only' if mode == 'plan' else 'workspace-write'}
             if mode == 'plan':
                 # App-server's bundled catalog is not an entitlement check.
-                models = requests.get(RESOURCE + '/models', headers={'Authorization': 'Bearer ' + token}, timeout=30)
-                models.raise_for_status()
-                available = [m for m in models.json().get('models', []) if m.get('visibility') == 'list']
-                if not available:
-                    raise RuntimeError('ChatGPT 账户没有返回可用模型。')
-                params['model'] = available[0]['slug']
+                available = self._chatgpt_models(token)
+                if model is not None and model not in {entry['slug'] for entry in available}:
+                    raise RuntimeError('所选模型已不在当前 ChatGPT 账户列表中，请刷新模型。')
+                params['model'] = model or available[0]['slug']
+            elif model:
+                params['model'] = model
             key = (mode, str(directory))
-            if key in self.threads:
+            if thread_id:
+                selected = server.request('thread/read', {'threadId': thread_id}).get('thread', {})
+                selected_cwd = selected.get('cwd')
+                if not selected_cwd or Path(selected_cwd).expanduser().resolve() != directory:
+                    raise RuntimeError('所选 Codex 对话的工作目录与当前目录不一致，请先切换工作目录。')
+                if selected.get('modelProvider') != 'openai':
+                    raise RuntimeError('无法确认所选历史使用 OpenAI 模型提供商；不会静默切换。')
+                if model is None and not selected.get('model'):
+                    raise RuntimeError('历史对话未提供原模型，无法确认是否保留；请明确选择模型。')
+                if effort is None and not selected.get('reasoningEffort'):
+                    raise RuntimeError('历史对话未提供原推理强度，无法确认是否保留；请明确选择推理强度。')
+                params['sandbox'] = task_sandbox
+                started = server.request('thread/resume', {'threadId': thread_id, **params})
+                expected_sandbox = {'read-only': 'readOnly', 'workspace-write': 'workspaceWrite'}[task_sandbox]
+                if (started.get('sandbox') or {}).get('type') != expected_sandbox or started.get('approvalPolicy') != 'on-request':
+                    raise RuntimeError('Codex 未确认所选沙箱和审批策略；未启动任务。')
+                if model is None and started.get('model') != selected['model']:
+                    raise RuntimeError('Codex 恢复的模型与历史模型不一致；请明确选择模型。')
+                if effort is None and started.get('reasoningEffort') != selected['reasoningEffort']:
+                    raise RuntimeError('Codex 恢复的推理强度与历史不一致；请明确选择推理强度。')
+                self.threads[key] = started['thread']['id']
+            elif key in self.threads:
                 started = server.request('thread/resume', {'threadId': self.threads[key], **params})
             else:
                 started = server.request('thread/start', params)
                 self.threads[key] = started['thread']['id']
             thread = started['thread']
+            self.emit('thread', {'mode': mode, 'thread': thread})
             start = {'threadId': thread['id'], 'input': [{'type': 'text', 'text': text}]}
+            if model:
+                start['model'] = model
+            if effort:
+                start['effort'] = effort
             if mode == 'plan':
                 start['collaborationMode'] = {'mode': 'plan', 'settings': {'model': params['model'], 'developer_instructions': None}}
                 start['sandboxPolicy'] = {'type': 'readOnly', 'networkAccess': False}

@@ -36,6 +36,7 @@ class WindowTests(unittest.TestCase):
         self.assertTrue(self.pet.click_timer.isActive())
         QTest.qWait(QApplication.doubleClickInterval() + 100)
         self.assertTrue(self.pet.behavior.message)
+        self.assertEqual(self.pet.behavior.reaction_pose, 'happy')
         self.manager.open_floating.assert_not_called()
 
     def test_double_click_opens_panel_and_cancels_single_click(self):
@@ -50,6 +51,7 @@ class WindowTests(unittest.TestCase):
         self.assertEqual(self.pet.behavior.message, '')
 
     def test_drag_does_not_greet_or_open_panel(self):
+        original = self.pet.pos()
         pos = QPoint(160, 100)
         QTest.mousePress(self.pet, Qt.LeftButton, pos=pos)
         moved = QPoint(200, 130)
@@ -57,8 +59,12 @@ class WindowTests(unittest.TestCase):
                             Qt.NoButton, Qt.LeftButton, Qt.NoModifier)
         QApplication.sendEvent(self.pet, event)
         self.assertTrue(self.pet.drag_moved)
+        self.assertTrue(self.pet.behavior.dragging)
+        if not self.pet.wayland:
+            self.assertEqual(self.pet.pos() - original, QPoint(40, 30))
         QTest.mouseRelease(self.pet, Qt.LeftButton, pos=moved)
         self.assertFalse(self.pet.behavior.dragging)
+        self.assertIsNotNone(self.pet.behavior.landed_at)
         QTest.qWait(QApplication.doubleClickInterval() + 100)
         self.assertEqual(self.pet.behavior.message, '')
         self.manager.open_floating.assert_not_called()
@@ -106,7 +112,7 @@ class WindowTests(unittest.TestCase):
 
         # Check the actual widget rendering as well as source frames; every
         # pose must keep the face area opaque when it is painted.
-        for pose in ('idle', 'blink', 'wave'):
+        for pose in ('idle', 'blink', 'wave', 'happy', 'work'):
             with mock.patch.object(self.pet.behavior, 'pose', return_value=pose), \
                     mock.patch('codex_pet.time.monotonic', return_value=100):
                 image = self.pet.grab().toImage()

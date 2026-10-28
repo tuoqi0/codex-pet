@@ -21,6 +21,21 @@ class PetBehavior:
         self.direction = 1
         self.message = ''
         self.reaction_pose = 'wave'
+        self.idle_pose = 'idle'
+        self.idle_pose_until = 0.0
+        self.idle_pose_at = now + self.rng.uniform(18.0, 30.0)
+        self.landed_at = None
+        self.activity = 'idle'
+
+    def set_activity(self, activity, now):
+        self.activity = activity
+        if activity == 'work':
+            self.idle_pose_until = 0.0
+        elif activity == 'celebrate':
+            self.idle_pose = 'happy'
+            self.idle_pose_until = now + 3.0
+            self.idle_pose_at = self.idle_pose_until + self.rng.uniform(24.0, 40.0)
+            self.activity = 'idle'
 
     def react(self, now, message, pose='wave'):
         self.message = message
@@ -31,10 +46,12 @@ class PetBehavior:
 
     def begin_drag(self):
         self.dragging = True
+        self.landed_at = None
         self.walk_until = 0.0
 
     def end_drag(self, now):
         self.dragging = False
+        self.landed_at = now
         self.last_tick = now
         self.walk_at = now + self.rng.uniform(7.0, 12.0)
 
@@ -52,6 +69,11 @@ class PetBehavior:
         if now >= self.blink_at:
             self.blink_until = now + self.BLINK_SECONDS
             self.blink_at = now + self.rng.uniform(3.0, 7.0)
+        if (not self.dragging and self.activity != 'work' and now >= self.reaction_until
+                and now >= self.idle_pose_at):
+            self.idle_pose = self.rng.choice(('tea', 'wave'))
+            self.idle_pose_until = now + self.rng.uniform(2.5, 4.0)
+            self.idle_pose_at = self.idle_pose_until + self.rng.uniform(24.0, 40.0)
         if not self.patrol or self.dragging or now < self.reaction_until:
             return 0.0
         if self.walk_until and now >= self.walk_until:
@@ -66,11 +88,19 @@ class PetBehavior:
         self.direction *= -1
 
     def pose(self, now):
+        if self.dragging:
+            return 'wave'
         if now < self.reaction_until:
             if self.reaction_pose != 'wave':
                 return self.reaction_pose
             elapsed = now - (self.reaction_until - self.REACTION_SECONDS)
             return 'wave' if int(elapsed / self.WAVE_FRAME_SECONDS) % 2 == 0 else 'wave2'
+        if self.activity == 'work':
+            return 'work'
+        if now < self.idle_pose_until and self.idle_pose == 'happy':
+            return 'happy'
         if now < self.blink_until:
             return 'blink'
+        if now < self.idle_pose_until:
+            return self.idle_pose
         return 'idle'
