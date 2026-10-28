@@ -15,6 +15,7 @@ from PyQt5.QtWidgets import QApplication, QMenu, QWidget
 
 from dragon_motion import motion_frames
 from pet_behavior import DragMotion, PetBehavior
+from input_shape import InputShape, dragon_outline, q_outline
 
 
 def asset_path(name):
@@ -68,12 +69,14 @@ def wave_alternate(base_path, alternate_path):
 class CodexPet(QWidget):
     WIDTH = 480
     HEIGHT = 300
-    MESSAGES = ('你好呀！', '摸摸頭，謝謝你！', '今天也一起加油 ✨', '我在這裡陪你。')
+    MESSAGES = ('你好呀！', '摸摸头，谢谢你！', '今天也一起加油 ✨', '我在这里陪你。')
 
     def __init__(self, manager=None):
         super().__init__()
         from speech_bubble import SpeechBubble
         self.manager = manager
+        self.input_shape = InputShape()
+        self._shape_screen_connected = False
         self.speech = SpeechBubble()
         self.scale_factor = 0.63
         self.frames = {}
@@ -174,7 +177,7 @@ class CodexPet(QWidget):
             if self.manager:
                 self.manager.open_floating(self)
             else:
-                self.react('很高興見到你！')
+                self.react('很高兴见到你！')
             self.press_global = None
             self.drag_offset = None
             event.accept()
@@ -182,7 +185,7 @@ class CodexPet(QWidget):
     def contextMenuEvent(self, event):
         menu = QMenu(self)
         menu.addAction('打招呼', lambda: self.greet())
-        patrol = menu.addAction('桌面巡遊（左右移動）')
+        patrol = menu.addAction('桌面巡游（左右移动）')
         patrol.setCheckable(True)
         patrol.setChecked(self.behavior.patrol)
         patrol.setEnabled(not self.wayland)
@@ -191,7 +194,7 @@ class CodexPet(QWidget):
         else:
             patrol.toggled.connect(lambda enabled: self.behavior.set_patrol(enabled, time.monotonic()))
         if self.wayland:
-            menu.addAction('Wayland 不支援自動定位').setEnabled(False)
+            menu.addAction('Wayland 不支持自动定位').setEnabled(False)
         if self.manager:
             self.manager.populate_menu(menu, self)
         menu.addSeparator()
@@ -213,17 +216,30 @@ class CodexPet(QWidget):
         if self.manager:
             self.manager.on_user_greet(self)
 
+    def _update_input_shape(self, *_args):
+        if self.isVisible():
+            dragon_outline(self)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not self._shape_screen_connected and self.windowHandle():
+            self.windowHandle().screenChanged.connect(self._update_input_shape)
+            self._shape_screen_connected = True
+        self._update_input_shape()
+
     def hideEvent(self, event):
         self.speech.hide()
         super().hideEvent(event)
 
     def closeEvent(self, event):
         self.speech.close()
+        self.input_shape.close()
         super().closeEvent(event)
 
     def set_scale(self, factor):
         self.scale_factor = factor
         self.setFixedSize(round(self.WIDTH * factor), round(self.HEIGHT * factor))
+        self._update_input_shape()
         self.update()
 
     def paintEvent(self, event):
@@ -266,9 +282,11 @@ class QPet(QWidget):
         from sprite_player import SpritePlayer
         from speech_bubble import SpeechBubble
         self.manager = manager
+        self.input_shape = InputShape()
+        self._shape_screen_connected = False
         self.speech = SpeechBubble()
         self.scale_factor = 1.0
-        self.setWindowTitle('Codex Pet · 白龍')
+        self.setWindowTitle('Codex Pet · 白龙')
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_NoSystemBackground)
@@ -285,6 +303,7 @@ class QPet(QWidget):
         self.player = SpritePlayer(root, self)
         self.player.pause()  # The top-level widget starts hidden.
         self.player.frame_changed.connect(self.update)
+        self.player.frame_changed.connect(self._update_input_shape)
         self.set_scale(1.0)
         area = QApplication.primaryScreen().availableGeometry()
         self.move(max(area.left(), area.right() - 430), max(area.top(), area.bottom() - self.height() - 28))
@@ -292,7 +311,12 @@ class QPet(QWidget):
     def set_scale(self, factor):
         self.scale_factor = factor
         self.setFixedSize(round(180 * factor), round(180 * factor))
+        self._update_input_shape()
         self.update()
+
+    def _update_input_shape(self, *_args):
+        if self.isVisible():
+            q_outline(self)
 
     def paintEvent(self, event):
         image = self.player.image
@@ -393,10 +417,15 @@ class QPet(QWidget):
     def showEvent(self, event):
         self.player.resume()
         super().showEvent(event)
+        if not self._shape_screen_connected and self.windowHandle():
+            self.windowHandle().screenChanged.connect(self._update_input_shape)
+            self._shape_screen_connected = True
+        self._update_input_shape()
 
     def closeEvent(self, event):
         self.player.close()
         self.speech.close()
+        self.input_shape.close()
         super().closeEvent(event)
 
 
@@ -467,9 +496,9 @@ class PetManager:
                     self.qpet.move(x, y)
                     self._restore_window(self.qpet, self.window_preferences.qpet)
             except (OSError, ValueError, ImportError) as exc:
-                print(f'白龍素材無法使用：{exc}', file=sys.stderr)
+                print(f'白龙素材无法使用：{exc}', file=sys.stderr)
         else:
-            print(f'白龍素材尚未導入：codex-pet-import /home/tq/codex-pet.tar.xz（目錄：{root}）', file=sys.stderr)
+            print(f'白龙素材尚未导入：codex-pet-import <素材压缩包路径>（目录：{root}）', file=sys.stderr)
         from window_preferences import ensure_visible
         available = {'dragon', 'qpet'} if self.qpet else {'dragon'}
         visible_preferences = ensure_visible(self.window_preferences, available)
@@ -790,7 +819,7 @@ class PetManager:
                     self.qpet.respond('我也在，和你一起！')
             elif (self.qpet.reaction_serial == serial
                   and self.interaction_ready(allow_q_reaction=True, user_initiated=True)):
-                self.dragon.react('我也在這裡陪你。')
+                self.dragon.react('我也在这里陪你。')
 
         QTimer.singleShot(1200, reply_if_ready)
 
@@ -803,13 +832,13 @@ class PetManager:
             return
         if self.next_interaction_speaker == 'dragon':
             greeting, reply, pose, animation = self.dragon.behavior.rng.choice((
-                ('小白龍，一起加油！', '好呀，一起！', 'wave', '01'),
-                ('今天也有你陪伴呢。', '我在這裡！', 'happy', '20'),
-                ('準備好一起出發了嗎？', '準備好了！', 'wave', '04'),
-                ('小白龍，我們一起陪伴主人吧。', '嗯！今天也要開開心心。', 'wave', '25'),
-                ('累的時候可以歇一歇哦。', '我們一起休息吧！', 'tea', '14'),
-                ('小白龍，你今天心情如何？', '看到大家就很開心！', 'happy', '20'),
-                ('我們給主人一點鼓勵吧。', '你已經做得很好啦！', 'wave', '01'),
+                ('小白龙，一起加油！', '好呀，一起！', 'wave', '01'),
+                ('今天也有你陪伴呢。', '我在这里！', 'happy', '20'),
+                ('准备好一起出发了吗？', '准备好了！', 'wave', '04'),
+                ('小白龙，我们一起陪伴主人吧。', '嗯！今天也要开开心心。', 'wave', '25'),
+                ('累的时候可以歇一歇哦。', '我们一起休息吧！', 'tea', '14'),
+                ('小白龙，你今天心情如何？', '看到大家就很开心！', 'happy', '20'),
+                ('我们给主人一点鼓励吧。', '你已经做得很好啦！', 'wave', '01'),
             ))
             self.dragon.react(greeting, pose)
             serial = self.dragon.reaction_serial
@@ -821,10 +850,10 @@ class PetManager:
                     self.qpet.respond(reply, animation if animation in self.qpet.player.entries else '01')
         else:
             greeting, reply, animation, pose = self.dragon.behavior.rng.choice((
-                ('龍姐姐，你在忙什麼呀？', '在這裡陪你，一起慢慢來。', '01', 'happy'),
-                ('我們一起給主人加油吧！', '好呀，你做得很好哦。', '20', 'wave'),
-                ('想和你一起喝茶！', '來，我們歇一小會兒。', '14', 'tea'),
-                ('今天也有大家一起，真開心。', '嗯，我也很高興！', '04', 'happy'),
+                ('龙姐姐，你在忙什么呀？', '在这里陪你，一起慢慢来。', '01', 'happy'),
+                ('我们一起给主人加油吧！', '好呀，你做得很好哦。', '20', 'wave'),
+                ('想和你一起喝茶！', '来，我们歇一小会儿。', '14', 'tea'),
+                ('今天也有大家一起，真开心。', '嗯，我也很高兴！', '04', 'happy'),
             ))
             animation = animation if animation in self.qpet.player.entries else '01'
             if not self.qpet.respond(greeting, animation):
@@ -844,22 +873,22 @@ class PetManager:
 
     def populate_menu(self, menu, current):
         menu.addSeparator()
-        menu.addAction('對話與任務', lambda: self.open_panel('chat'))
-        menu.addAction('查看額度', lambda: self.open_panel('limits'))
+        menu.addAction('对话与任务', lambda: self.open_panel('chat'))
+        menu.addAction('查看额度', lambda: self.open_panel('limits'))
         sizes = menu.addMenu('角色大小')
-        for label, value in (('小', 0.75), ('標準', 1.0), ('大', 1.25)):
+        for label, value in (('小', 0.75), ('标准', 1.0), ('大', 1.25)):
             # Dragon uses a different base size than Q.
             factor = value * (0.63 if current is self.dragon else 1.0)
             sizes.addAction(label, lambda checked=False, n=factor: self.set_pet_scale(current, n))
         if self.qpet:
             other = self.qpet if current is self.dragon else self.dragon
-            action = menu.addAction('隱藏另一個角色' if other.isVisible() else '顯示另一個角色')
+            action = menu.addAction('隐藏另一个角色' if other.isVisible() else '显示另一个角色')
             action.triggered.connect(lambda: self.set_pet_visible(other, not other.isVisible()))
-            menu.addAction('隱藏這個角色', lambda: self.set_pet_visible(current, False)).setEnabled(other.isVisible())
+            menu.addAction('隐藏这个角色', lambda: self.set_pet_visible(current, False)).setEnabled(other.isVisible())
         else:
-            menu.addAction('白龍素材尚未導入（見終端提示）').setEnabled(False)
+            menu.addAction('白龙素材尚未导入（见终端提示）').setEnabled(False)
         if current.wayland:
-            menu.addAction('Wayland 下定位及置頂取決於桌面').setEnabled(False)
+            menu.addAction('Wayland 下定位及置顶取决于桌面').setEnabled(False)
 
     def play_action(self, action):
         # A quota refresh can happen while a turn is running. Keep both pets

@@ -327,7 +327,9 @@ for line in sys.stdin:
                 if method in ('thread/start', 'thread/resume'): return {'thread': {'id': 't'}, 'model': 'm'}
                 if method == 'model/list': return {'data': [{'model': 'm', 'inputModalities': ['text', 'image']}]}
                 if method == 'turn/start':
-                    self.snapshot = Path(params['input'][1]['path'])
+                    assert params['input'][0]['type'] == 'text' and '默认用简体中文' in params['input'][0]['text']
+                    assert params['input'][1] == {'type': 'text', 'text': 'look'}
+                    self.snapshot = Path(next(item['path'] for item in params['input'] if item['type'] == 'localImage'))
                     if not self.snapshot.is_file() or self.snapshot.read_bytes() != image_data:
                         raise AssertionError('snapshot not readable at turn/start')
                     if self.snapshot.stat().st_mode & 0o777 != 0o600:
@@ -527,6 +529,11 @@ for line in sys.stdin:
         self.assertEqual(requests['thread/resume']['sandbox'], 'read-only')
         self.assertEqual(requests['turn/start']['model'], 'selected-model')
         self.assertEqual(requests['turn/start']['effort'], 'high')
+        inputs = requests['turn/start']['input']
+        self.assertIn('默认用简体中文', inputs[0]['text'])
+        self.assertIn('如果本轮用户要求其他语言或文字，请遵从', inputs[0]['text'])
+        self.assertEqual(inputs[1], {'type': 'text', 'text': 'hello'})
+        self.assertNotIn('developerInstructions', requests['thread/resume'])
         self.assertEqual(b.threads[('task', directory)], 'selected')
 
     def test_history_resume_requires_explicit_permission_and_confirmation(self):
@@ -620,6 +627,9 @@ for line in sys.stdin:
         self.assertFalse(kwargs['json']['store'])
         self.assertTrue(kwargs['json']['stream'])
         self.assertNotIn('tools', kwargs['json'])
+        self.assertIn('默认用简体中文', kwargs['json']['instructions'])
+        self.assertIn('如果用户要求其他语言或文字，遵从用户的要求', kwargs['json']['instructions'])
+        self.assertEqual(kwargs['json']['input'], [{'role': 'user', 'content': 'hi'}])
         self.assertEqual(b.history[-1], {'role': 'assistant', 'content': 'hello'})
         with mock.patch.object(backend.requests, 'get', return_value=models), mock.patch.object(backend.requests, 'post', return_value=Response()):
             with self.assertRaisesRegex(RuntimeError, '完整结束'):
@@ -631,6 +641,19 @@ for line in sys.stdin:
         with mock.patch.object(backend.requests, 'get', return_value=models), mock.patch.object(backend.requests, 'post', return_value=byte_stream):
             b._chat('bytes')
         self.assertEqual(b.history[-1]['content'], '你好')
+
+    def test_chat_language_default_keeps_explicit_user_request_unchanged(self):
+        b = backend.Backend(lambda *_: None, auth=FakeAuth())
+        models = Response({'models': [{'slug': 'model-one', 'visibility': 'list'}]})
+        stream = Response(lines=['data: ' + json.dumps({'type': 'response.completed'})])
+        with mock.patch.object(backend.requests, 'get', return_value=models), \
+             mock.patch.object(backend.requests, 'post', return_value=stream) as post:
+            b._chat('Please answer in English.')
+        body = post.call_args.kwargs['json']
+        self.assertEqual(body['input'], [{'role': 'user', 'content': 'Please answer in English.'}])
+        self.assertIn('默认用简体中文', body['instructions'])
+        self.assertIn('遵从用户的要求', body['instructions'])
+        self.assertEqual(b.history[0]['content'], 'Please answer in English.')
 
     def test_chat_http_failures_report_safe_structured_diagnostics(self):
         class FailedResponse(Response):
@@ -721,6 +744,31 @@ for line in sys.stdin:
         server.handle({'id': 11, 'method': 'unknown/request', 'params': {}})
         self.assertIn('error', sent[-1])
 
+    def test_command_approval_accepts_only_server_offered_decisions(self):
+        sent = []
+        server = object.__new__(backend.AppServer)
+        server.write = sent.append
+        server.pending_approvals = {1: ('item/commandExecution/requestApproval',
+                                        {'availableDecisions': ['decline', 'cancel']})}
+        with self.assertRaises(ValueError):
+            server.approve(1, 'accept')
+        self.assertEqual(sent, [])
+        self.assertIn(1, server.pending_approvals)
+        server.approve(1, 'decline')
+        self.assertEqual(sent, [{'id': 1, 'result': {'decision': 'decline'}}])
+        server.pending_approvals[2] = ('item/commandExecution/requestApproval',
+                                       {'availableDecisions': [{'applyNetworkPolicyAmendment': {}}]})
+        server.approve(2, 'unsupported')
+        self.assertEqual(sent[-1]['error']['code'], -32601)
+        self.assertNotIn(2, server.pending_approvals)
+        server.mode = 'plan'
+        server.handle({'id': 3, 'method': 'item/commandExecution/requestApproval',
+                       'params': {'availableDecisions': ['cancel']}})
+        self.assertEqual(sent[-1]['result']['decision'], 'cancel')
+        server.handle({'id': 4, 'method': 'item/commandExecution/requestApproval',
+                       'params': {'availableDecisions': ['accept']}})
+        self.assertIn('error', sent[-1])
+
     def test_progress_keeps_plan_and_tool_lifecycle_without_private_outputs(self):
         events = []
         server = object.__new__(backend.AppServer)
@@ -786,6 +834,10 @@ for line in sys.stdin:
         self.assertEqual(server.requests[0][1]['sandbox'], 'read-only')
         turn = server.requests[1][1]
         self.assertEqual(turn['collaborationMode']['mode'], 'plan')
+        self.assertIn('默认用简体中文', turn['input'][0]['text'])
+        self.assertEqual(turn['input'][1], {'type': 'text', 'text': 'test'})
+        self.assertIsNone(turn['collaborationMode']['settings']['developer_instructions'])
+        self.assertNotIn('developerInstructions', server.requests[0][1])
         self.assertEqual(turn['sandboxPolicy']['type'], 'readOnly')
         self.assertEqual(turn['approvalPolicy'], 'never')
 

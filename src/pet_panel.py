@@ -129,7 +129,7 @@ class ChatTranscript(QScrollArea):
         self.scroll_restore_generation = 0
         self.verticalScrollBar().rangeChanged.connect(self._range_changed)
         self.verticalScrollBar().valueChanged.connect(self._position_changed)
-        self.add_message('assistant', '你好呀，我在這裡。想聊聊天，或一起處理什麼事情？')
+        self.add_message('assistant', '你好呀，我在这里。想聊聊天，或一起处理什么事情？')
 
     def add_message(self, role, text):
         self._remember_scroll_position()
@@ -238,7 +238,7 @@ class PetPanel(QDialog):
     def __init__(self, action_callback=None, parent=None, backend_factory=Backend):
         super().__init__(parent)
         self.setObjectName('petPanel')
-        self.setWindowTitle('Codex Pet · 對話與額度')
+        self.setWindowTitle('Codex Pet · 对话与额度')
         self.resize(650, 780)
         self.setMinimumSize(480, 580)
         self.setStyleSheet(STYLE)
@@ -284,7 +284,7 @@ class PetPanel(QDialog):
         self._build_limits()
         layout.addWidget(self.tabs, 1)
         self.status = StatusLabel()
-        self.status.setText('✦  尚未連接。請先登入 ChatGPT。')
+        self.status.setText('✦  尚未连接。请先登录 ChatGPT。')
         self.status.setMaximumHeight(38)
         self.status.setObjectName('status')
         self.status.setWordWrap(True)
@@ -319,11 +319,11 @@ class PetPanel(QDialog):
         row.addWidget(avatar)
         titles = QVBoxLayout()
         titles.setSpacing(1)
-        eyebrow = QLabel('✦  你的桌面夥伴')
+        eyebrow = QLabel('✦  你的桌面伙伴')
         eyebrow.setObjectName('eyebrow')
         title = QLabel('Codex Pet')
         title.setObjectName('heroTitle')
-        subtitle = QLabel('聊聊靈感，也陪你完成每一件事。')
+        subtitle = QLabel('聊聊灵感，也陪你完成每一件事。')
         subtitle.setObjectName('heroSub')
         titles.addWidget(eyebrow)
         titles.addWidget(title)
@@ -347,17 +347,17 @@ class PetPanel(QDialog):
         card_layout.setContentsMargins(12, 7, 12, 7)
         card_layout.setSpacing(4)
         row = QHBoxLayout()
-        mode_label = QLabel('對話模式')
+        mode_label = QLabel('对话模式')
         mode_label.setObjectName('muted')
         row.addWidget(mode_label)
         self.mode = ModeSelector()
-        for label, value in (('普通對話 · ChatGPT 計劃', 'chat'),
-                             ('計劃 · ChatGPT 計劃', 'plan'),
-                             ('任務 · Codex', 'task')):
+        for label, value in (('普通对话 · ChatGPT 计划', 'chat'),
+                             ('计划 · ChatGPT 计划', 'plan'),
+                             ('任务 · Codex', 'task')):
             self.mode.addItem(label, value)
         self.mode.currentIndexChanged.connect(self._mode_changed)
         row.addWidget(self.mode, 1)
-        self.login_button = QPushButton('登入 ChatGPT')
+        self.login_button = QPushButton('登录 ChatGPT')
         self.login_button.setObjectName('compact')
         self.login_button.clicked.connect(self.backend_login)
         row.addWidget(self.login_button)
@@ -373,28 +373,28 @@ class PetPanel(QDialog):
         options.addWidget(self.model_refresh)
         card_layout.addLayout(options)
         model_options = QHBoxLayout()
-        self.effort_label = QLabel('推理強度')
+        self.effort_label = QLabel('推理强度')
         self.effort = ModeSelector()
         self.effort.currentIndexChanged.connect(self._effort_changed)
         model_options.addWidget(self.effort_label)
         model_options.addWidget(self.effort, 1)
-        self.new_button = QPushButton('新對話')
+        self.new_button = QPushButton('新对话')
         self.new_button.setObjectName('compact')
         self.new_button.clicked.connect(self._new_conversation)
         model_options.addWidget(self.new_button)
-        self.threads_button = QPushButton('選擇 Codex 對話')
+        self.threads_button = QPushButton('选择 Codex 对话')
         self.threads_button.setObjectName('compact')
         self.threads_button.clicked.connect(self._open_threads)
         model_options.addWidget(self.threads_button)
-        self.thread_refresh = QPushButton('刷新已選對話')
+        self.thread_refresh = QPushButton('刷新已选对话')
         self.thread_refresh.setObjectName('compact')
-        self.thread_refresh.setToolTip('只重新讀取已選 Codex 對話；不發送消息或執行任務。')
+        self.thread_refresh.setToolTip('只重新读取已选 Codex 对话；不发送消息或执行任务。')
         self.thread_refresh.clicked.connect(self._refresh_thread)
         model_options.addWidget(self.thread_refresh)
         card_layout.addLayout(model_options)
-        self.thread_follow = QCheckBox('自動跟隨已選對話（約 30 秒，非即時）')
+        self.thread_follow = QCheckBox('自动跟随已选对话（约 30 秒，非即时）')
         self.thread_follow.setChecked(True)
-        self.thread_follow.setToolTip('只在此面板顯示且任務模式空閒時讀取已選對話，可隨時關閉。')
+        self.thread_follow.setToolTip('只在此面板显示且任务模式空闲时读取已选对话，可随时关闭。')
         self.thread_follow.toggled.connect(self._follow_toggled)
         card_layout.addWidget(self.thread_follow)
         self.notice = QLabel()
@@ -402,27 +402,27 @@ class PetPanel(QDialog):
         self.notice.setWordWrap(True)
         card_layout.addWidget(self.notice)
         project = QHBoxLayout()
-        self.project_label = QLabel('工作目錄：尚未選擇')
+        self.project_label = QLabel('工作目录：尚未选择')
         self.project_label.setObjectName('muted')
         self.project_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.project_label.setWordWrap(True)
         project.addWidget(self.project_label, 1)
-        self.choose_cwd = QPushButton('選擇目錄')
+        self.choose_cwd = QPushButton('选择目录')
         self.choose_cwd.setObjectName('compact')
         self.choose_cwd.clicked.connect(self._choose_cwd)
         project.addWidget(self.choose_cwd)
         card_layout.addLayout(project)
         permission = QHBoxLayout()
-        self.permission_label = QLabel('本次權限')
+        self.permission_label = QLabel('本次权限')
         self.permission = ModeSelector()
-        self.permission.addItem('請選擇本次權限', None)
-        self.permission.addItem('只讀', 'read-only')
-        self.permission.addItem('工作目錄可寫', 'workspace-write')
-        self.permission.setToolTip('只作用於本次桌寵執行；不代表繼承原對話權限。需要時會請求審批。')
+        self.permission.addItem('请选择本次权限', None)
+        self.permission.addItem('只读', 'read-only')
+        self.permission.addItem('工作目录可写', 'workspace-write')
+        self.permission.setToolTip('只作用于本次桌宠执行；不代表继承原对话权限。需要时会请求审批。')
         permission.addWidget(self.permission_label)
         permission.addWidget(self.permission, 1)
         card_layout.addLayout(permission)
-        self.permission_notice = QLabel('僅適用本次執行，不代表繼承原對話權限；需要時請求審批。')
+        self.permission_notice = QLabel('仅适用本次执行，不代表继承原对话权限；需要时请求审批。')
         self.permission_notice.setObjectName('notice')
         self.permission_notice.setWordWrap(True)
         card_layout.addWidget(self.permission_notice)
@@ -444,7 +444,7 @@ class PetPanel(QDialog):
         progress_layout = QVBoxLayout(self.progress_panel)
         progress_layout.setContentsMargins(0, 0, 0, 0)
         progress_layout.setSpacing(3)
-        self.progress_toggle = QPushButton('執行進度 ▾')
+        self.progress_toggle = QPushButton('执行进度 ▾')
         self.progress_toggle.setObjectName('compact')
         self.progress_toggle.clicked.connect(self._toggle_progress)
         progress_layout.addWidget(self.progress_toggle)
@@ -456,7 +456,7 @@ class PetPanel(QDialog):
         self.progress_panel.hide()
         layout.addWidget(self.progress_panel)
         self.prompt = QPlainTextEdit()
-        self.prompt.setPlaceholderText('寫下想說的話，或者描述一個任務…')
+        self.prompt.setPlaceholderText('写下想说的话，或者描述一个任务…')
         self.prompt.setMinimumHeight(54)
         self.prompt.setMaximumHeight(72)
         layout.addWidget(self.prompt)
@@ -469,7 +469,7 @@ class PetPanel(QDialog):
         self.upload_hint.setObjectName('muted')
         self.upload_hint.setWordWrap(True)
         attachment_content.addWidget(self.upload_hint)
-        self.attachment_review = QLabel('登入已更新；附件仍在草稿中。發送前請確認帳戶和圖片。')
+        self.attachment_review = QLabel('登录已更新；附件仍在草稿中。发送前请确认账户和图片。')
         self.attachment_review.setObjectName('notice')
         self.attachment_review.setWordWrap(True)
         self.attachment_review.hide()
@@ -477,23 +477,23 @@ class PetPanel(QDialog):
         self.image_list = QListWidget()
         self.image_list.setObjectName('imageList')
         self.image_list.setMaximumHeight(54)
-        self.image_list.setAccessibleName('本次發送的圖片')
+        self.image_list.setAccessibleName('本次发送的图片')
         attachment_content.addWidget(self.image_list)
         attachment_row.addLayout(attachment_content, 1)
-        self.remove_image = QPushButton('移除所選')
+        self.remove_image = QPushButton('移除所选')
         self.remove_image.setObjectName('compact')
         self.remove_image.clicked.connect(self._remove_image)
         attachment_row.addWidget(self.remove_image)
         self.attachments.hide()
         layout.addWidget(self.attachments)
         buttons = QHBoxLayout()
-        self.add_image = QPushButton('＋ 圖片')
+        self.add_image = QPushButton('＋ 图片')
         self.add_image.setObjectName('compact')
         self.add_image.clicked.connect(self._choose_images)
         buttons.addWidget(self.add_image)
-        self.restore_draft = QPushButton('恢復失敗草稿')
+        self.restore_draft = QPushButton('恢复失败草稿')
         self.restore_draft.setObjectName('compact')
-        self.restore_draft.setToolTip('把先前失敗的內容加回目前草稿，不會覆蓋目前輸入。')
+        self.restore_draft.setToolTip('把先前失败的内容加回目前草稿，不会覆盖目前输入。')
         self.restore_draft.clicked.connect(self._restore_failed_draft)
         self.restore_draft.hide()
         buttons.addWidget(self.restore_draft)
@@ -501,13 +501,13 @@ class PetPanel(QDialog):
         self.cancel_button = QPushButton('停止')
         self.cancel_button.setEnabled(False)
         self.cancel_button.clicked.connect(self.backend_cancel)
-        self.send_button = QPushButton('發送  ↗')
+        self.send_button = QPushButton('发送  ↗')
         self.send_button.setObjectName('primary')
         self.send_button.clicked.connect(self._send)
         buttons.addWidget(self.cancel_button)
         buttons.addWidget(self.send_button)
         layout.addLayout(buttons)
-        self.tabs.addTab(page, '對話與任務')
+        self.tabs.addTab(page, '对话与任务')
         self._mode_changed()
 
     def _build_limits(self):
@@ -516,10 +516,10 @@ class PetPanel(QDialog):
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 10, 0, 0)
         layout.setSpacing(12)
-        heading = QLabel('帳戶與用量')
+        heading = QLabel('账户与用量')
         heading.setObjectName('sectionTitle')
         layout.addWidget(heading)
-        description = QLabel('查看目前授權帳戶及 Codex 回傳的用量窗口。')
+        description = QLabel('查看目前授权账户及 Codex 回传的用量窗口。')
         description.setObjectName('muted')
         description.setWordWrap(True)
         layout.addWidget(description)
@@ -527,12 +527,12 @@ class PetPanel(QDialog):
         account_layout = QVBoxLayout(account)
         account_layout.setContentsMargins(17, 16, 17, 16)
         account_layout.setSpacing(12)
-        account_heading = QLabel('✦  已連接的帳戶')
+        account_heading = QLabel('✦  已连接的账户')
         account_heading.setObjectName('sectionTitle')
         account_layout.addWidget(account_heading)
-        self.account_text = QLabel('ChatGPT 授權：尚未查詢')
+        self.account_text = QLabel('ChatGPT 授权：尚未查询')
         self.account_text.setWordWrap(True)
-        self.codex_account_text = QLabel('Codex 帳戶：尚未查詢')
+        self.codex_account_text = QLabel('Codex 账户：尚未查询')
         self.codex_account_text.setWordWrap(True)
         account_layout.addWidget(self.account_text)
         account_layout.addWidget(self.codex_account_text)
@@ -541,10 +541,10 @@ class PetPanel(QDialog):
         usage_layout = QVBoxLayout(usage)
         usage_layout.setContentsMargins(17, 16, 17, 16)
         usage_layout.setSpacing(12)
-        usage_heading = QLabel('◷  Codex 額度')
+        usage_heading = QLabel('◷  Codex 额度')
         usage_heading.setObjectName('sectionTitle')
         usage_layout.addWidget(usage_heading)
-        self.limit_text = QLabel('Codex 額度：尚未查詢')
+        self.limit_text = QLabel('Codex 额度：尚未查询')
         self.limit_text.setWordWrap(True)
         self.limit_text.setTextInteractionFlags(Qt.TextSelectableByMouse)
         usage_layout.addWidget(self.limit_text)
@@ -568,7 +568,7 @@ class PetPanel(QDialog):
         layout.addWidget(usage)
         layout.addStretch(1)
         row = QHBoxLayout()
-        refresh = QPushButton('刷新額度')
+        refresh = QPushButton('刷新额度')
         refresh.setObjectName('primary')
         refresh.clicked.connect(lambda: self.refresh_limits())
         manage = QPushButton('管理 ChatGPT 用量')
@@ -582,7 +582,7 @@ class PetPanel(QDialog):
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setWidget(page)
-        self.tabs.addTab(scroll, '帳戶與額度')
+        self.tabs.addTab(scroll, '账户与额度')
 
     def open_page(self, page='chat'):
         self.tabs.setCurrentIndex(1 if page == 'limits' else 0)
@@ -599,7 +599,7 @@ class PetPanel(QDialog):
             return
         self.login_inflight = True
         self.login_button.setEnabled(False)
-        self.status.setText('正在啟動 ChatGPT 授權…')
+        self.status.setText('正在启动 ChatGPT 授权…')
         self.backend.login()
 
     def refresh_limits(self, include_account=True):
@@ -608,7 +608,7 @@ class PetPanel(QDialog):
         self.limits_inflight = True
         self.limits_changed.emit('loading', None)
         self.action_callback('quota')
-        self.status.setText('正在查詢 Codex 額度…')
+        self.status.setText('正在查询 Codex 额度…')
         if include_account:
             self.backend.account()
         self.backend.limits()
@@ -617,7 +617,7 @@ class PetPanel(QDialog):
     def backend_cancel(self):
         if self.busy:
             self.cancel_button.setEnabled(False)
-            self.status.setText('正在請求停止，等待 Codex 確認結果…')
+            self.status.setText('正在请求停止，等待 Codex 确认结果…')
         self.backend.cancel()
 
     def _mode_changed(self):
@@ -628,22 +628,22 @@ class PetPanel(QDialog):
             self.mode.blockSignals(True)
             self.mode.setCurrentIndex(self.mode.findData(self.active_mode))
             self.mode.blockSignals(False)
-            self.status.setText('正在執行，請先停止或等待完成再切換模式。')
+            self.status.setText('正在执行，请先停止或等待完成再切换模式。')
             return
         notices = {
-            'chat': '普通對話使用 ChatGPT 授權，無本地工具。圖片加入上下文後，後續請求會再次傳送，直至新對話。',
-            'plan': '計劃使用 ChatGPT 授權及只讀工作目錄；用量可能與 Codex 共享。',
-            'task': '任務使用已登入的 Codex ChatGPT 帳戶；可依設定執行工具與請求審批。',
+            'chat': '普通对话使用 ChatGPT 授权，无本地工具。图片加入上下文后，后续请求会再次传送，直至新对话。',
+            'plan': '计划使用 ChatGPT 授权及只读工作目录；用量可能与 Codex 共享。',
+            'task': '任务使用已登录的 Codex ChatGPT 账户；可依设定执行工具与请求审批。',
         }
-        self.notice.setText(notices[mode] + ' 各模式各自保留上下文；不會同步 ChatGPT 網站對話。')
-        image_notice = ('普通對話：發送的圖片會隨後續請求再次傳送，直至新對話。'
+        self.notice.setText(notices[mode] + ' 各模式各自保留上下文；不会同步 ChatGPT 网站对话。')
+        image_notice = ('普通对话：发送的图片会随后续请求再次传送，直至新对话。'
                         if mode == 'chat' else
-                        '計劃／任務：圖片由 Codex 線程管理；臨時副本在執行結束後清理。')
+                        '计划／任务：图片由 Codex 线程管理；临时副本在执行结束后清理。')
         self.upload_hint.setText(image_notice)
         self.add_image.setToolTip(
-            '選擇本機圖片，按發送時上傳。' + image_notice +
-            f'最多 {MAX_IMAGE_COUNT} 張，單張 {MAX_IMAGE_BYTES // (1024 * 1024)} MiB，'
-            f'總計 {MAX_IMAGE_TOTAL_BYTES // (1024 * 1024)} MiB。')
+            '选择本机图片，按发送时上传。' + image_notice +
+            f'最多 {MAX_IMAGE_COUNT} 张，单张 {MAX_IMAGE_BYTES // (1024 * 1024)} MiB，'
+            f'总计 {MAX_IMAGE_TOTAL_BYTES // (1024 * 1024)} MiB。')
         if hasattr(self, 'transcripts'):
             self.transcript = self.transcripts[mode]
             self.transcript_stack.setCurrentWidget(self.transcript)
@@ -667,7 +667,7 @@ class PetPanel(QDialog):
         self.model_generation[mode] += 1
         if mode == self.mode.currentData():
             self.model_refresh.setEnabled(False)
-            self.status.setText('正在查詢可用模型…')
+            self.status.setText('正在查询可用模型…')
         self.backend.models(mode, self.model_generation[mode])
 
     def _show_models(self, mode):
@@ -675,7 +675,7 @@ class PetPanel(QDialog):
         self.model.clear()
         entries = self.model_cache.get(mode, [])
         if mode == 'task' and self.selected_thread:
-            self.model.addItem('沿用所選對話的模型與強度', {'id': None, 'follow_thread': True})
+            self.model.addItem('沿用所选对话的模型与强度', {'id': None, 'follow_thread': True})
         for item in entries:
             self.model.addItem(item.get('name') or item['id'], item)
         choice = self.model_choice.get(mode)
@@ -691,7 +691,7 @@ class PetPanel(QDialog):
             default = next((i for i, m in enumerate(entries) if m.get('default')), 0)
             self.model.setCurrentIndex(default)
         else:
-            self.model.addItem('尚無模型，請刷新', None)
+            self.model.addItem('尚无模型，请刷新', None)
         self.model.blockSignals(False)
         self.model_refresh.setEnabled(not self.busy and mode not in self.models_loading)
         self._model_changed()
@@ -706,7 +706,7 @@ class PetPanel(QDialog):
         self.effort.clear()
         efforts = item.get('efforts') or []
         default = item.get('default_effort')
-        self.effort.addItem('默認' + ('（' + default + '）' if default else ''), None)
+        self.effort.addItem('默认' + ('（' + default + '）' if default else ''), None)
         for effort in efforts:
             self.effort.addItem(effort, effort)
         remembered = self.effort_choice.get((mode, model_id))
@@ -735,7 +735,7 @@ class PetPanel(QDialog):
         mode = self.mode.currentData()
         self.backend.new_thread(mode, self.cwd)
         self.transcript.clear()
-        self.transcript.add_message('assistant', '新的對話已開始。')
+        self.transcript.add_message('assistant', '新的对话已开始。')
         if mode == 'task':
             self.selected_thread = None
             if self.model_choice.get('task') == '__thread__':
@@ -743,12 +743,12 @@ class PetPanel(QDialog):
             self.permission.setCurrentIndex(0)
             self._show_permission()
             self._show_models(mode)
-        self.status.setText('已開始新對話；原有 Codex 歷史不會刪除。')
+        self.status.setText('已开始新对话；原有 Codex 历史不会删除。')
 
     def _choose_cwd(self):
         if self.busy or self.thread_loading:
             return
-        selected = QFileDialog.getExistingDirectory(self, '選擇工作目錄', self.cwd or str(Path.home()))
+        selected = QFileDialog.getExistingDirectory(self, '选择工作目录', self.cwd or str(Path.home()))
         if selected:
             if selected != self.cwd:
                 self.selected_thread = None
@@ -768,8 +768,8 @@ class PetPanel(QDialog):
         if self.busy or self.login_inflight:
             return
         paths, _ = QFileDialog.getOpenFileNames(
-            self, '選擇要隨本次對話上傳的圖片', str(Path.home()),
-            '圖片 (*.png *.PNG *.jpg *.JPG *.jpeg *.JPEG *.webp *.WEBP *.gif *.GIF)')
+            self, '选择要随本次对话上传的图片', str(Path.home()),
+            '图片 (*.png *.PNG *.jpg *.JPG *.jpeg *.JPEG *.webp *.WEBP *.gif *.GIF)')
         added = 0
         over_limit = False
         for path in paths:
@@ -782,9 +782,9 @@ class PetPanel(QDialog):
             added += 1
         self._show_images()
         if over_limit:
-            self.status.setText(f'一次最多附加 {MAX_IMAGE_COUNT} 張圖片，請先移除不需要的圖片。')
+            self.status.setText(f'一次最多附加 {MAX_IMAGE_COUNT} 张图片，请先移除不需要的图片。')
         elif added:
-            self.status.setText('圖片已選擇；按發送時上傳。' + self.upload_hint.text())
+            self.status.setText('图片已选择；按发送时上传。' + self.upload_hint.text())
 
     def _show_images(self):
         self.image_list.clear()
@@ -805,7 +805,7 @@ class PetPanel(QDialog):
     def _update_failed_drafts(self):
         self.restore_draft.setVisible(bool(self.failed_drafts))
         if self.failed_drafts:
-            self.restore_draft.setText(f'恢復失敗草稿 ({len(self.failed_drafts)})')
+            self.restore_draft.setText(f'恢复失败草稿 ({len(self.failed_drafts)})')
         self.restore_draft.setEnabled(not self.busy)
 
     def _restore_failed_draft(self):
@@ -814,11 +814,11 @@ class PetPanel(QDialog):
         draft = self.failed_drafts[0]
         if (draft['mode'] != self.mode.currentData()
                 or (draft['mode'] != 'chat' and draft['cwd'] != self.cwd)):
-            self.status.setText('請切回原對話模式和工作目錄，再恢復這份草稿。')
+            self.status.setText('请切回原对话模式和工作目录，再恢复这份草稿。')
             return
         images = self.images + [path for path in draft['images'] if path not in self.images]
         if len(images) > MAX_IMAGE_COUNT:
-            self.status.setText('圖片數量超過上限，請先移除目前草稿中的圖片，再恢復。')
+            self.status.setText('图片数量超过上限，请先移除目前草稿中的图片，再恢复。')
             return
         current = self.prompt.toPlainText()
         self.prompt.setPlainText(current + ('\n\n' if current else '') + draft['text'])
@@ -828,34 +828,34 @@ class PetPanel(QDialog):
         self.failed_drafts.pop(0)
         self._show_images()
         self._update_failed_drafts()
-        self.status.setText('已恢復草稿。上次請求可能已部分處理，重試可能重複。')
+        self.status.setText('已恢复草稿。上次请求可能已部分处理，重试可能重复。')
 
     def _open_threads(self):
         if self.busy or self.thread_dialog is not None:
             return
         if self.thread_loading:
-            self.status.setText('上一個對話查詢仍在進行，請稍候。')
+            self.status.setText('上一个对话查询仍在进行，请稍候。')
             return
         dialog = QDialog(self)
-        dialog.setWindowTitle('選擇 Codex 對話')
+        dialog.setWindowTitle('选择 Codex 对话')
         dialog.setModal(True)
         dialog.resize(560, 420)
         layout = QVBoxLayout(dialog)
-        note = QLabel('僅在你選擇後讀取完整對話；繼續任務會使用該對話的工作目錄。'
-                      '若其他 Codex 窗口同時操作同一對話，可能造成衝突。')
+        note = QLabel('仅在你选择后读取完整对话；继续任务会使用该对话的工作目录。'
+                      '若其他 Codex 窗口同时操作同一对话，可能造成冲突。')
         note.setWordWrap(True)
         layout.addWidget(note)
         self.thread_list = QListWidget(dialog)
         layout.addWidget(self.thread_list, 1)
-        self.thread_status = QLabel('正在載入…')
+        self.thread_status = QLabel('正在载入…')
         self.thread_status.setWordWrap(True)
         layout.addWidget(self.thread_status)
         row = QHBoxLayout()
-        self.thread_more = QPushButton('載入更多')
+        self.thread_more = QPushButton('载入更多')
         self.thread_more.clicked.connect(lambda: self._load_threads(self.thread_cursor))
-        self.thread_open = QPushButton('讀取所選對話')
+        self.thread_open = QPushButton('读取所选对话')
         self.thread_open.clicked.connect(self._read_thread)
-        close = QPushButton('關閉')
+        close = QPushButton('关闭')
         close.clicked.connect(dialog.reject)
         row.addWidget(self.thread_more)
         row.addStretch()
@@ -876,10 +876,10 @@ class PetPanel(QDialog):
         if self.thread_loading or self.thread_dialog is None:
             return
         self.thread_loading = True
-        self.thread_more.setText('載入更多')
+        self.thread_more.setText('载入更多')
         self.thread_more.setEnabled(False)
         self.thread_open.setEnabled(False)
-        self.thread_status.setText('正在載入對話列表…')
+        self.thread_status.setText('正在载入对话列表…')
         self.backend.codex_threads(cursor)
 
     def _read_thread(self):
@@ -890,7 +890,7 @@ class PetPanel(QDialog):
         self.thread_loading = True
         self.thread_more.setEnabled(False)
         self.thread_open.setEnabled(False)
-        self.thread_status.setText('正在讀取所選對話…')
+        self.thread_status.setText('正在读取所选对话…')
         self.backend.codex_thread(self.thread_reading)
 
     def _show_thread_list(self, result):
@@ -904,14 +904,14 @@ class PetPanel(QDialog):
             if not isinstance(thread, dict) or not thread.get('id'):
                 continue
             title = thread.get('name') or thread.get('preview') or thread['id']
-            item = QListWidgetItem(str(title)[:160] + '\n' + str(thread.get('cwd') or '工作目錄不可用'))
+            item = QListWidgetItem(str(title)[:160] + '\n' + str(thread.get('cwd') or '工作目录不可用'))
             item.setData(Qt.UserRole, thread['id'])
             self.thread_list.addItem(item)
         self.thread_cursor = result.get('nextCursor')
         self.thread_loading = False
         self.thread_more.setEnabled(bool(self.thread_cursor))
         self.thread_open.setEnabled(True)
-        self.thread_status.setText('請選擇對話後點擊讀取。' if self.thread_list.count() else '沒有找到 Codex 對話。')
+        self.thread_status.setText('请选择对话后点击读取。' if self.thread_list.count() else '没有找到 Codex 对话。')
 
     def _follow_toggled(self, checked):
         self.thread_follow_generation += 1
@@ -940,12 +940,12 @@ class PetPanel(QDialog):
         self.thread_follow_request_generation = self.thread_follow_generation if automatic else None
         self._show_permission()
         self.send_button.setEnabled(False)
-        self.send_button.setToolTip('正在讀取已選對話，完成後可發送。')
+        self.send_button.setToolTip('正在读取已选对话，完成后可发送。')
         self.new_button.setEnabled(False)
         self.threads_button.setEnabled(False)
         self.choose_cwd.setEnabled(False)
         if not automatic:
-            self.status.setText('正在刷新已選對話…')
+            self.status.setText('正在刷新已选对话…')
         self.backend.codex_thread(self.thread_reading)
 
     def _follow_result_is_stale(self):
@@ -1006,14 +1006,14 @@ class PetPanel(QDialog):
             if refreshing:
                 self._finish_thread_refresh()
                 if not automatic or not self.thread_follow_failed:
-                    self.status.setText('無法確認已選對話或工作目錄，刷新失敗。')
+                    self.status.setText('无法确认已选对话或工作目录，刷新失败。')
                 if automatic:
                     self.thread_follow_failed = True
             else:
                 self.thread_loading = False
                 self.thread_reading = None
                 self.thread_open.setEnabled(True)
-                self.thread_status.setText('無法確認對話或工作目錄，請重試。')
+                self.thread_status.setText('无法确认对话或工作目录，请重试。')
             return
         messages = []
         for turn in turns:
@@ -1025,7 +1025,7 @@ class PetPanel(QDialog):
                         if not isinstance(part, dict):
                             continue
                         if part.get('type') in ('image', 'localImage', 'input_image'):
-                            parts.append('[圖片]')
+                            parts.append('[图片]')
                         elif part.get('text'):
                             parts.append(str(part['text']))
                     text = '\n'.join(part for part in parts if part)
@@ -1034,13 +1034,13 @@ class PetPanel(QDialog):
                 elif kind == 'agentMessage' and item.get('text'):
                     messages.append(('assistant', str(item['text'])))
                 elif kind == 'plan' and item.get('text'):
-                    messages.append(('assistant', '[歷史計劃]\n' + str(item['text'])))
+                    messages.append(('assistant', '[历史计划]\n' + str(item['text'])))
                 elif kind in ('commandExecution', 'fileChange', 'webSearch',
                               'mcpToolCall', 'dynamicToolCall', 'contextCompaction'):
-                    labels = {'commandExecution': '命令', 'fileChange': '文件變更',
-                              'webSearch': '網絡搜索', 'mcpToolCall': 'MCP 工具',
+                    labels = {'commandExecution': '命令', 'fileChange': '文件变更',
+                              'webSearch': '网络搜索', 'mcpToolCall': 'MCP 工具',
                               'dynamicToolCall': '工具', 'contextCompaction': '上下文整理'}
-                    summary = '[歷史執行] ' + labels[kind]
+                    summary = '[历史执行] ' + labels[kind]
                     if item.get('status'):
                         summary += ' · ' + str(item['status'])
                     if kind == 'fileChange':
@@ -1063,10 +1063,10 @@ class PetPanel(QDialog):
             transcript.replace_messages_preserving_scroll(messages)
             self._finish_thread_refresh()
             if not automatic:
-                self.status.setText('已刷新所選 Codex 對話；草稿和本次權限保持不變。')
+                self.status.setText('已刷新所选 Codex 对话；草稿和本次权限保持不变。')
             elif self.thread_follow_failed:
                 self.thread_follow_failed = False
-                self.status.setText('已恢復跟隨所選 Codex 對話。')
+                self.status.setText('已恢复跟随所选 Codex 对话。')
             return
         transcript.clear()
         for role, text in messages:
@@ -1083,7 +1083,7 @@ class PetPanel(QDialog):
         self.thread_loading = False
         self.thread_reading = None
         self.thread_dialog.accept()
-        self.status.setText('已讀取 Codex 對話；發送後會在此對話中繼續。')
+        self.status.setText('已读取 Codex 对话；发送后会在此对话中继续。')
 
     def _send(self):
         draft_text = self.prompt.toPlainText()
@@ -1092,25 +1092,25 @@ class PetPanel(QDialog):
         if (not text and not self.images) or self.busy or self.thread_loading:
             return
         if self.login_inflight:
-            self.status.setText('正在等待授權完成，請稍後再發送。')
+            self.status.setText('正在等待授权完成，请稍后再发送。')
             return
         if mode != 'chat' and not self.cwd:
-            QMessageBox.information(self, '選擇工作目錄', '計劃和任務需要先選擇工作目錄。')
+            QMessageBox.information(self, '选择工作目录', '计划和任务需要先选择工作目录。')
             return
         selected = self.model.currentData()
         if not selected:
-            self.status.setText('沒有可選模型，請先刷新模型。')
+            self.status.setText('没有可选模型，请先刷新模型。')
             return
         if mode == 'task' and self.selected_thread and not self.permission.currentData():
-            self.status.setText('請先選擇本次執行權限；不會自動沿用原對話權限。')
+            self.status.setText('请先选择本次执行权限；不会自动沿用原对话权限。')
             self.options_scroll.ensureWidgetVisible(self.permission)
             self.permission.setFocus()
             return
         if self.images and self.images_after_login_need_review:
             names = '\n'.join(Path(path).name for path in self.images)
             confirmation = QMessageBox.question(
-                self, '確認附件與登入帳戶',
-                '登入已更新，請確認目前模式使用的帳戶，並確認要發送這些草稿圖片：\n\n' + names,
+                self, '确认附件与登录账户',
+                '登录已更新，请确认目前模式使用的账户，并确认要发送这些草稿图片：\n\n' + names,
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
             if confirmation != QMessageBox.Yes:
                 return
@@ -1143,7 +1143,7 @@ class PetPanel(QDialog):
         self.images.clear()
         self._show_images()
         names = '\n'.join(Path(path).name for path in images)
-        self.transcript.start_exchange(text + ('\n\n[圖片附件]\n' + names if names else ''))
+        self.transcript.start_exchange(text + ('\n\n[图片附件]\n' + names if names else ''))
         if mode in ('task', 'plan'):
             self.action_callback('work')
         self.backend.send(mode, text, self.cwd, selected['id'],
@@ -1157,16 +1157,16 @@ class PetPanel(QDialog):
 
     def _toggle_progress(self):
         self.progress_log.setVisible(self.progress_log.isHidden())
-        self.progress_toggle.setText('執行進度 ▾' if not self.progress_log.isHidden() else '執行進度 ▸')
+        self.progress_toggle.setText('执行进度 ▾' if not self.progress_log.isHidden() else '执行进度 ▸')
 
     def _progress(self, data):
         if not isinstance(data, dict):
             return
         kind = data.get('kind')
         if kind == 'item':
-            labels = {'commandExecution': '命令', 'fileChange': '文件變更', 'webSearch': '網絡搜索',
+            labels = {'commandExecution': '命令', 'fileChange': '文件变更', 'webSearch': '网络搜索',
                       'mcpToolCall': 'MCP 工具', 'dynamicToolCall': '工具', 'contextCompaction': '上下文整理'}
-            phase = '開始' if data.get('phase') == 'started' else '結束'
+            phase = '开始' if data.get('phase') == 'started' else '结束'
             line = f'{phase}：{labels.get(data.get("type"), "工具")}'
             if data.get('status'):
                 line += ' · ' + str(data['status'])
@@ -1175,14 +1175,14 @@ class PetPanel(QDialog):
             self.progress_entries.append(line)
             self.progress_entries = self.progress_entries[-200:]
         elif kind == 'model_rerouted':
-            line = f'模型已變更：{data.get("from_model") or "未知"} → {data.get("to_model") or "未知"}'
+            line = f'模型已变更：{data.get("from_model") or "未知"} → {data.get("to_model") or "未知"}'
             if data.get('reason'):
                 line += '\n原因：' + str(data['reason'])[:4000]
             self.progress_entries.append(line)
             self.progress_entries = self.progress_entries[-200:]
         elif kind == 'plan':
             steps = data.get('steps') or []
-            lines = ['執行計劃：']
+            lines = ['执行计划：']
             if data.get('explanation'):
                 lines.append(str(data['explanation'])[:4000])
             for step in steps[:100]:
@@ -1217,7 +1217,7 @@ class PetPanel(QDialog):
             if mode == self.mode.currentData():
                 self._show_models(mode)
                 if not self.busy:
-                    self.status.setText('已更新可用模型。' if entries else '沒有可選模型，請刷新。')
+                    self.status.setText('已更新可用模型。' if entries else '没有可选模型，请刷新。')
         elif event == 'models_error':
             mode = data.get('mode')
             if mode not in self.model_generation or data.get('generation') != self.model_generation[mode]:
@@ -1225,7 +1225,7 @@ class PetPanel(QDialog):
             self.models_loading.discard(mode)
             if mode == self.mode.currentData():
                 self._show_models(mode)
-                self.status.setText('模型查詢失敗：' + str(data.get('message', '未知錯誤')))
+                self.status.setText('模型查询失败：' + str(data.get('message', '未知错误')))
         elif event == 'codex_threads':
             self._show_thread_list(data)
         elif event == 'codex_thread':
@@ -1238,16 +1238,16 @@ class PetPanel(QDialog):
                 return
             if automatic:
                 if not self.thread_follow_failed:
-                    self.status.setText('自動跟隨暫不可用；可手動刷新。')
+                    self.status.setText('自动跟随暂不可用；可手动刷新。')
                 self.thread_follow_failed = True
                 return
             if self.thread_dialog is not None:
-                self.thread_status.setText('對話查詢失敗：' + str(data))
-                self.thread_more.setText('重試')
+                self.thread_status.setText('对话查询失败：' + str(data))
+                self.thread_more.setText('重试')
                 self.thread_more.setEnabled(True)
                 self.thread_open.setEnabled(True)
             else:
-                self.status.setText('對話查詢失敗：' + str(data))
+                self.status.setText('对话查询失败：' + str(data))
         elif event == 'delta':
             self._append(data)
         elif event == 'progress':
@@ -1257,10 +1257,10 @@ class PetPanel(QDialog):
         elif event == 'error':
             self.status.setText(str(data))
             if self.busy:
-                self._append('\n[錯誤] ' + str(data) + '\n')
+                self._append('\n[错误] ' + str(data) + '\n')
                 self.last_error = str(data)
             else:
-                self.transcript.add_message('assistant', '[錯誤] ' + str(data))
+                self.transcript.add_message('assistant', '[错误] ' + str(data))
         elif event == 'login_complete':
             self.login_inflight = False
             self.login_button.setEnabled(not self.busy)
@@ -1277,7 +1277,7 @@ class PetPanel(QDialog):
                 self.model_choice.pop(mode, None)
                 self.backend.new_thread(mode, self.cwd)
                 self.transcripts[mode].clear()
-                self.transcripts[mode].add_message('assistant', '授權已更新，已開始新的對話。')
+                self.transcripts[mode].add_message('assistant', '授权已更新，已开始新的对话。')
             if self.mode.currentData() in ('chat', 'plan'):
                 self._show_models(self.mode.currentData())
             for mode in ('chat', 'plan'):
@@ -1293,15 +1293,15 @@ class PetPanel(QDialog):
             if outcome == 'completed':
                 self.status.setText('完成')
             elif outcome == 'unknown':
-                message = '任務結果未知，無法確認是否已停止或完成。請先檢查 Codex 對話及工作目錄；重試可能重複執行。'
+                message = '任务结果未知，无法确认是否已停止或完成。请先检查 Codex 对话及工作目录；重试可能重复执行。'
                 self.status.setText(message)
                 self.transcript.add_message('assistant', message)
             elif outcome == 'interrupted':
-                self.status.setText('已確認停止；此前可能已有部分操作。')
+                self.status.setText('已确认停止；此前可能已有部分操作。')
             elif self.last_error:
-                self.status.setText('請求失敗：' + self.last_error)
+                self.status.setText('请求失败：' + self.last_error)
             else:
-                self.status.setText('已結束：' + str(outcome or '未知'))
+                self.status.setText('已结束：' + str(outcome or '未知'))
             draft = self.inflight_draft
             self.inflight_draft = None
             if outcome != 'completed' and draft:
@@ -1309,10 +1309,10 @@ class PetPanel(QDialog):
                     self.prompt.setPlainText(draft['text'])
                     self.images = draft['images']
                     self._show_images()
-                    self.status.setText(self.status.text() + '；草稿已恢復，上次請求可能已部分處理。')
+                    self.status.setText(self.status.text() + '；草稿已恢复，上次请求可能已部分处理。')
                 else:
                     self.failed_drafts.append(draft)
-                    self.status.setText(self.status.text() + '；草稿可恢復，上次請求可能已部分處理。')
+                    self.status.setText(self.status.text() + '；草稿可恢复，上次请求可能已部分处理。')
             if outcome == 'completed' and result.get('mode') == 'task':
                 self.action_callback('celebrate')
             else:
@@ -1323,7 +1323,7 @@ class PetPanel(QDialog):
             info = account.get('account') or account
             info = info if isinstance(info, dict) else {}
             target = self.codex_account_text if account.get('source') == 'Codex' else self.account_text
-            label = 'Codex 帳戶：' if target is self.codex_account_text else 'ChatGPT 授權：'
+            label = 'Codex 账户：' if target is self.codex_account_text else 'ChatGPT 授权：'
             target.setText(label + str(info.get('email') or info.get('type') or '不可用') +
                            '　方案：' + str(info.get('planType') or '不可用'))
         elif event == 'limits':
@@ -1332,10 +1332,10 @@ class PetPanel(QDialog):
             self.limits_changed.emit('limits', data)
         elif event == 'limits_error':
             self.limits_inflight = False
-            self.limit_text.setText('Codex 額度查詢失敗：' + str(data))
+            self.limit_text.setText('Codex 额度查询失败：' + str(data))
             for widget, _, _ in self.usage_bars:
                 widget.hide()
-            self.status.setText('額度查詢失敗：' + str(data))
+            self.status.setText('额度查询失败：' + str(data))
             self.limits_changed.emit('limits_error', data)
         elif event == 'approval':
             self._approval(data)
@@ -1389,10 +1389,10 @@ class PetPanel(QDialog):
                     reset_text = datetime.fromtimestamp(reset).strftime('%Y-%m-%d %H:%M') if reset is not None else '不可用'
                 except (TypeError, ValueError, OSError, OverflowError):
                     reset_text = '不可用'
-                lines.append(f'{name} {label}：已用 {used if used is not None else "不可用"}%　窗口 {minutes if minutes is not None else "不可用"} 分鐘　重置 {reset_text}')
+                lines.append(f'{name} {label}：已用 {used if used is not None else "不可用"}%　窗口 {minutes if minutes is not None else "不可用"} 分钟　重置 {reset_text}')
                 if isinstance(used, (int, float)) and not isinstance(used, bool) and math.isfinite(used) and 0 <= used <= 100:
                     metrics.append((f'{name} · {label}  {used}%', round(used)))
-        self.limit_text.setText('\n'.join(lines) if lines else 'Codex 額度：不可用')
+        self.limit_text.setText('\n'.join(lines) if lines else 'Codex 额度：不可用')
         for index, (widget, caption, bar) in enumerate(self.usage_bars):
             if index < len(metrics):
                 caption.setText(metrics[index][0])
@@ -1409,43 +1409,68 @@ class PetPanel(QDialog):
             answers = {}
             questions = data.get('params', {}).get('questions', [])
             for question in questions:
-                options = question.get('options') or []
-                labels = [str(option.get('label', '')) for option in options if isinstance(option, dict)]
-                if labels:
-                    value, ok = QInputDialog.getItem(self, 'Codex 需要你的回答',
-                                                     str(question.get('question', '')), labels, 0, True)
-                else:
-                    echo = QLineEdit.Password if question.get('isSecret') else QLineEdit.Normal
-                    value, ok = QInputDialog.getText(self, 'Codex 需要你的回答',
-                                                     str(question.get('question', '')), echo)
-                if not ok:
-                    self.backend.approve(data['id'], 'cancel')
-                    return
+                options = [option for option in (question.get('options') or [])
+                           if isinstance(option, dict) and isinstance(option.get('label'), str)]
+                labels = [option['label'] for option in options]
+                prompt = str(question.get('question', ''))
+                if options:
+                    descriptions = [option['label'] + (('：' + str(option['description']))
+                                    if option.get('description') else '') for option in options]
+                    prompt += '\n\n' + '\n'.join(descriptions)
+                secret = bool(question.get('isSecret'))
+                allow_other = bool(question.get('isOther'))
+                while True:
+                    if labels and not secret:
+                        value, ok = QInputDialog.getItem(self, 'Codex 需要你的回答', prompt,
+                                                         labels, 0, allow_other)
+                    else:
+                        echo = QLineEdit.Password if secret else QLineEdit.Normal
+                        value, ok = QInputDialog.getText(self, 'Codex 需要你的回答', prompt, echo)
+                    if not ok:
+                        self.backend.approve(data['id'], 'cancel')
+                        return
+                    if not labels or allow_other or value in labels:
+                        break
+                    prompt = str(question.get('question', '')) + '\n请输入列出的选项。\n' + '\n'.join(labels)
                 answers[str(question.get('id', ''))] = {'answers': [str(value)]}
             self.backend.approve(data['id'], {'answers': answers})
             return
         if method not in ('item/commandExecution/requestApproval', 'item/fileChange/requestApproval',
                           'item/permissions/requestApproval'):
             self.backend.approve(data['id'], 'decline')
-            self.status.setText('不支援的審批請求已拒絕：' + method)
+            self.status.setText('不支持的审批请求已拒绝：' + method)
             return
-        details = json.dumps(data.get('params', {}), ensure_ascii=False, indent=2, default=str)
+        params = data.get('params', {})
+        allowed = params.get('availableDecisions') if method == 'item/commandExecution/requestApproval' else None
+        choices = ('accept', 'decline', 'cancel') if allowed is None else tuple(
+            decision for decision in ('accept', 'decline', 'cancel')
+            if isinstance(allowed, list) and decision in allowed)
+        if not choices:
+            self.backend.approve(data['id'], 'unsupported')
+            self.status.setText('此审批的决定选项暂不支持，已拒绝处理。')
+            return
+        details = json.dumps(params, ensure_ascii=False, indent=2, default=str)
         dialog = QDialog(self)
-        dialog.setWindowTitle('Codex 請求審批')
+        dialog.setWindowTitle('Codex 请求审批')
         dialog.resize(600, 400)
         layout = QVBoxLayout(dialog)
-        layout.addWidget(QLabel('請檢查完整請求後決定是否允許：'))
+        layout.addWidget(QLabel('请检查请求后决定：'))
         body = QPlainTextEdit(dialog)
         body.setReadOnly(True)
         body.setPlainText(details)
         layout.addWidget(body)
-        buttons = QDialogButtonBox(QDialogButtonBox.Yes | QDialogButtonBox.No, parent=dialog)
-        buttons.button(QDialogButtonBox.No).setDefault(True)
-        buttons.accepted.connect(dialog.accept)
-        buttons.rejected.connect(dialog.reject)
+        buttons = QDialogButtonBox(parent=dialog)
+        selected = []
+        names = {'accept': '允许', 'decline': '拒绝', 'cancel': '拒绝并停止'}
+        for choice in choices:
+            button = buttons.addButton(names[choice], QDialogButtonBox.ActionRole)
+            if choice == ('decline' if 'decline' in choices else 'cancel'):
+                button.setDefault(True)
+            button.clicked.connect(lambda checked=False, value=choice: (selected.append(value), dialog.accept()))
         layout.addWidget(buttons)
-        answer = dialog.exec_()
-        self.backend.approve(data['id'], 'accept' if answer == QDialog.Accepted else 'decline')
+        dialog.exec_()
+        decision = selected[0] if selected else next((value for value in ('decline', 'cancel') if value in choices), 'unsupported')
+        self.backend.approve(data['id'], decision)
 
     def closeEvent(self, event):
         self.hide()

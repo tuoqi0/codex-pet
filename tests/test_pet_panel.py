@@ -53,6 +53,48 @@ class PanelTests(unittest.TestCase):
         self.panel.deleteLater()
         self.app.processEvents()
 
+    def test_question_choices_and_secret_are_respected(self):
+        question = {'id': 'q', 'question': '選擇', 'isSecret': False, 'isOther': False,
+                    'options': [{'label': 'A', 'description': '描述 A'}, {'label': 'B', 'description': '描述 B'}]}
+        with mock.patch.object(pet_panel.QInputDialog, 'getItem', return_value=('B', True)) as choose:
+            self.panel._approval({'id': 1, 'method': 'item/tool/requestUserInput', 'params': {'questions': [question]}})
+        self.assertFalse(choose.call_args.args[-1])
+        self.assertIn('描述 A', choose.call_args.args[2])
+        self.assertEqual(self.panel.backend.calls[-1], ('approve', 1, {'answers': {'q': {'answers': ['B']}}}))
+        question.update(isSecret=True, isOther=False)
+        with mock.patch.object(pet_panel.QInputDialog, 'getText', side_effect=[('invalid', True), ('A', True)]) as secret, \
+             mock.patch.object(pet_panel.QInputDialog, 'getItem') as choose:
+            self.panel._approval({'id': 2, 'method': 'item/tool/requestUserInput', 'params': {'questions': [question]}})
+        self.assertEqual(secret.call_count, 2)
+        self.assertTrue(all(call.args[3] == pet_panel.QLineEdit.Password for call in secret.call_args_list))
+        self.assertFalse(choose.called)
+        self.assertEqual(self.panel.backend.calls[-1], ('approve', 2, {'answers': {'q': {'answers': ['A']}}}))
+        question.update(isSecret=False, isOther=True)
+        with mock.patch.object(pet_panel.QInputDialog, 'getItem', return_value=('自訂', True)) as choose:
+            self.panel._approval({'id': 3, 'method': 'item/tool/requestUserInput', 'params': {'questions': [question]}})
+        self.assertTrue(choose.call_args.args[-1])
+        self.assertEqual(self.panel.backend.calls[-1], ('approve', 3, {'answers': {'q': {'answers': ['自訂']}}}))
+
+    def test_approval_shows_only_offered_commands_and_closes_safely(self):
+        observed = []
+        def reject():
+            dialog = QApplication.activeModalWidget()
+            observed.extend(button.text() for button in dialog.findChildren(QPushButton))
+            dialog.reject()
+        QTimer.singleShot(0, reject)
+        self.panel._approval({'id': 1, 'method': 'item/commandExecution/requestApproval',
+                              'params': {'availableDecisions': ['decline', 'cancel']}})
+        self.assertNotIn('允许', observed)
+        self.assertIn('拒绝', observed)
+        self.assertEqual(self.panel.backend.calls[-1], ('approve', 1, 'decline'))
+        self.panel._approval({'id': 2, 'method': 'item/commandExecution/requestApproval',
+                              'params': {'availableDecisions': [{'applyNetworkPolicyAmendment': {}}]}})
+        self.assertEqual(self.panel.backend.calls[-1], ('approve', 2, 'unsupported'))
+        QTimer.singleShot(0, lambda: QApplication.activeModalWidget().reject())
+        self.panel._approval({'id': 3, 'method': 'item/commandExecution/requestApproval',
+                              'params': {'availableDecisions': ['accept']}})
+        self.assertEqual(self.panel.backend.calls[-1], ('approve', 3, 'unsupported'))
+
     def test_refresh_selected_thread_preserves_draft_and_permissions(self):
         self.panel.mode.setCurrentIndex(2)
         self.panel.cwd = '/tmp'
@@ -97,7 +139,7 @@ class PanelTests(unittest.TestCase):
             {'items': [{'type': 'agentMessage', 'text': '不應顯示'}]}]}})
         self.assertIn('原有內容', self.panel.transcripts['task'].toPlainText())
         self.assertNotIn('不應顯示', self.panel.transcripts['task'].toPlainText())
-        self.assertIn('刷新失敗', self.panel.status.text())
+        self.assertIn('刷新失败', self.panel.status.text())
 
     def test_refresh_malformed_history_and_mode_switch_preserve_state(self):
         self.panel.mode.setCurrentIndex(2)
@@ -194,7 +236,7 @@ class PanelTests(unittest.TestCase):
         self.app.processEvents()
         self.panel._follow_thread_tick()
         self.panel.bridge.received.emit('codex_thread_error', '私有故障詳情')
-        self.assertIn('自動跟隨暫不可用', self.panel.status.text())
+        self.assertIn('自动跟随暂不可用', self.panel.status.text())
         self.assertNotIn('私有故障詳情', self.panel.status.text())
         self.panel.status.setText('其他操作狀態')
         self.panel._follow_thread_tick()
@@ -202,7 +244,7 @@ class PanelTests(unittest.TestCase):
         self.assertEqual(self.panel.status.text(), '其他操作狀態')
         self.panel._follow_thread_tick()
         self.panel.bridge.received.emit('codex_thread', {'thread': {'id': 'chosen', 'cwd': '/tmp', 'turns': []}})
-        self.assertIn('已恢復', self.panel.status.text())
+        self.assertIn('已恢复', self.panel.status.text())
 
     def test_refresh_preserves_scrollback_and_draft(self):
         self.panel.mode.setCurrentIndex(2)
@@ -337,7 +379,7 @@ class PanelTests(unittest.TestCase):
         self.panel.bridge.received.emit('error', '網路問題' * 100)
         QTest.qWait(100)
         self.assertEqual(transcript.bubbles[-2].toPlainText(), old_reply)
-        self.assertTrue(transcript.bubbles[-1].toPlainText().startswith('[錯誤]'))
+        self.assertTrue(transcript.bubbles[-1].toPlainText().startswith('[错误]'))
         self.assertLessEqual(self.panel.status.height(), 38)
         self.assertIn('網路問題', self.panel.status.toolTip())
 
@@ -409,7 +451,7 @@ class PanelTests(unittest.TestCase):
         }})
         QTest.qWait(30)
         scroll = self.panel.tabs.currentWidget()
-        refresh = next(button for button in scroll.findChildren(QPushButton) if button.text() == '刷新額度')
+        refresh = next(button for button in scroll.findChildren(QPushButton) if button.text() == '刷新额度')
         scroll.ensureWidgetVisible(refresh)
         QTest.qWait(20)
         self.assertTrue(scroll.viewport().rect().contains(refresh.mapTo(scroll.viewport(), refresh.rect().center())))
@@ -540,17 +582,17 @@ class PanelTests(unittest.TestCase):
         self.assertIsNone(self.panel.backend.calls[-1][-1])
 
     def test_image_context_disclosure_changes_with_mode(self):
-        self.assertIn('後續請求會再次傳送', self.panel.notice.text())
-        self.assertIn('後續請求再次傳送', self.panel.upload_hint.text())
-        self.assertIn('新對話', self.panel.upload_hint.text())
+        self.assertIn('后续请求会再次传送', self.panel.notice.text())
+        self.assertIn('后续请求再次传送', self.panel.upload_hint.text())
+        self.assertIn('新对话', self.panel.upload_hint.text())
         with mock.patch.object(pet_panel.QFileDialog, 'getOpenFileNames', return_value=(['/tmp/one.png'], '')):
             self.panel.add_image.click()
-        self.assertIn('後續請求再次傳送', self.panel.status.text())
+        self.assertIn('后续请求再次传送', self.panel.status.text())
         for mode in ('plan', 'task'):
             self.panel.mode.setCurrentIndex(self.panel.mode.findData(mode))
-            self.assertIn('Codex 線程管理', self.panel.upload_hint.text())
-            self.assertIn('臨時副本', self.panel.upload_hint.text())
-            self.assertIn('執行結束後清理', self.panel.upload_hint.text())
+            self.assertIn('Codex 线程管理', self.panel.upload_hint.text())
+            self.assertIn('临时副本', self.panel.upload_hint.text())
+            self.assertIn('执行结束后清理', self.panel.upload_hint.text())
 
     def test_cancel_or_exceeding_image_selection_does_not_send_files(self):
         with mock.patch.object(pet_panel.QFileDialog, 'getOpenFileNames', return_value=([], '')):
@@ -593,7 +635,7 @@ class PanelTests(unittest.TestCase):
         self.panel._send()
         self.assertEqual(self.panel.backend.calls[-1],
                          ('send', 'chat', '', None, 'model', None, None, None, ['/tmp/one.png']))
-        self.assertIn('[圖片附件]', self.panel.transcript.toPlainText())
+        self.assertIn('[图片附件]', self.panel.transcript.toPlainText())
 
     def test_login_retains_images_and_requires_explicit_account_review(self):
         self.panel.images = ['/tmp/one.png']
@@ -630,7 +672,7 @@ class PanelTests(unittest.TestCase):
         self.panel.bridge.received.emit('done', {'mode': 'chat', 'status': 'failed'})
         self.assertEqual(self.panel.prompt.toPlainText(), '  讀取圖片\n')
         self.assertEqual(self.panel.images, ['/tmp/one.png'])
-        self.assertIn('草稿已恢復', self.panel.status.text())
+        self.assertIn('草稿已恢复', self.panel.status.text())
         self.assertEqual(sum(call[0] == 'send' for call in self.panel.backend.calls), 1)
         self.assertFalse(self.panel.busy)
 
@@ -649,7 +691,7 @@ class PanelTests(unittest.TestCase):
         self.assertEqual(self.panel.prompt.toPlainText(), '後續輸入\n\n原草稿')
         self.assertEqual(self.panel.images, ['/tmp/one.png'])
         self.assertEqual(self.panel.failed_drafts, [])
-        self.assertIn('可能已部分處理', self.panel.status.text())
+        self.assertIn('可能已部分处理', self.panel.status.text())
 
     def test_stop_with_unknown_result_warns_and_preserves_draft(self):
         self.panel.mode.setCurrentIndex(2)
@@ -664,9 +706,9 @@ class PanelTests(unittest.TestCase):
         self.assertIn('等待', self.panel.status.text())
         self.panel.bridge.received.emit('error', '連線中斷')
         self.panel.bridge.received.emit('done', {'mode': 'task', 'status': 'unknown'})
-        self.assertIn('結果未知', self.panel.status.text())
-        self.assertIn('無法確認', self.panel.status.text())
-        self.assertIn('重試可能重複', self.panel.transcript.toPlainText())
+        self.assertIn('结果未知', self.panel.status.text())
+        self.assertIn('无法确认', self.panel.status.text())
+        self.assertIn('重试可能重复', self.panel.transcript.toPlainText())
         self.assertEqual(self.panel.prompt.toPlainText(), '執行任務')
         self.assertEqual(self.panel.images, ['/tmp/task.png'])
         self.assertEqual(self.actions[-1], 'idle')
@@ -697,7 +739,7 @@ class PanelTests(unittest.TestCase):
         self.assertEqual(self.panel.prompt.toPlainText(), 'new')
         self.assertEqual(len(self.panel.images), 4)
         self.assertEqual(len(self.panel.failed_drafts), 1)
-        self.assertIn('超過上限', self.panel.status.text())
+        self.assertIn('超过上限', self.panel.status.text())
 
     def test_small_window_keeps_selected_images_and_controls_reachable(self):
         self.panel.resize(480, 580)
@@ -725,7 +767,7 @@ class PanelTests(unittest.TestCase):
         self.panel.bridge.received.emit('codex_thread', {'thread': {'id': 'two', 'cwd': '/tmp', 'turns': [
             {'items': [{'type': 'userMessage', 'content': [{'type': 'text', 'text': '看圖'},
               {'type': 'localImage', 'path': '/tmp/private-snapshot.png'}]}]}]}})
-        self.assertIn('[圖片]', self.panel.transcript.toPlainText())
+        self.assertIn('[图片]', self.panel.transcript.toPlainText())
         self.assertNotIn('private-snapshot', self.panel.transcript.toPlainText())
 
     def test_selected_history_shows_plan_and_safe_tool_summaries_in_order(self):
@@ -745,7 +787,7 @@ class PanelTests(unittest.TestCase):
                 {'type': 'agentMessage', 'text': '完成'}]}]}})
         text = self.panel.transcript.toPlainText()
         self.assertLess(text.index('工作'), text.index('第一步：檢查'))
-        self.assertLess(text.index('第一步：檢查'), text.index('歷史執行'))
+        self.assertLess(text.index('第一步：檢查'), text.index('历史执行'))
         self.assertLess(text.index('example.py'), text.index('完成'))
         self.assertIn('docs / lookup', text)
         self.assertNotIn('private', text)
@@ -770,7 +812,7 @@ class PanelTests(unittest.TestCase):
         self.panel.prompt.setPlainText('繼續')
         self.panel._send()
         self.assertFalse(self.panel.busy)
-        self.assertIn('選擇本次執行權限', self.panel.status.text())
+        self.assertIn('选择本次执行权限', self.panel.status.text())
         self.panel.permission.setCurrentIndex(self.panel.permission.findData('read-only'))
         self.panel._send()
         self.assertEqual(self.panel.backend.calls[-1], ('send', 'task', '繼續', '/tmp', None, None, 'two', 'read-only', None))
@@ -817,7 +859,7 @@ class PanelTests(unittest.TestCase):
             self.panel.bridge.received.emit('progress', event)
         self.assertFalse(self.panel.progress_panel.isHidden())
         text = self.panel.progress_log.toPlainText()
-        for fragment in ('開始：命令', '第一步', '檢查', 'a → b', '服務調整'):
+        for fragment in ('开始：命令', '第一步', '檢查', 'a → b', '服務調整'):
             self.assertIn(fragment, text)
         self.assertEqual(text.count('第一步'), 1)
         self.panel.progress_toggle.click()
@@ -846,7 +888,7 @@ class PanelTests(unittest.TestCase):
         self.assertGreater(scroll.verticalScrollBar().maximum(), 0)
         self.assertTrue(scroll.viewport().rect().contains(
             self.panel.permission.mapTo(scroll.viewport(), self.panel.permission.rect().center())))
-        self.assertIn('選擇本次執行權限', self.panel.status.text())
+        self.assertIn('选择本次执行权限', self.panel.status.text())
 
     def test_closed_picker_waits_for_inflight_result_before_reopen(self):
         self.panel.mode.setCurrentIndex(2)

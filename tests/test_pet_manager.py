@@ -149,7 +149,7 @@ class ManagerIntegrationTests(unittest.TestCase):
 
         menu = QMenu()
         manager.populate_menu(menu, manager.qpet)
-        next(a for a in menu.actions() if a.text() == '隱藏這個角色').trigger()
+        next(a for a in menu.actions() if a.text() == '隐藏这个角色').trigger()
         self.assertFalse(manager.qpet.isVisible())
         prefs, warning = self.window_store.load()
         self.assertIsNone(warning)
@@ -172,7 +172,7 @@ class ManagerIntegrationTests(unittest.TestCase):
         self.assertFalse(self.manager.qpet.isVisible())
         menu = QMenu()
         self.manager.populate_menu(menu, self.manager.dragon)
-        next(a for a in menu.actions() if a.text() == '顯示另一個角色').trigger()
+        next(a for a in menu.actions() if a.text() == '显示另一个角色').trigger()
         self.assertTrue(self.manager.qpet.isVisible())
         self.assertTrue(self.window_store.load()[0].qpet.visible)
 
@@ -288,7 +288,7 @@ class ManagerIntegrationTests(unittest.TestCase):
         with mock.patch.object(codex_pet.QTimer, 'singleShot') as delayed:
             manager.on_user_greet(manager.qpet)
             delayed.call_args.args[1]()
-            self.assertEqual(manager.dragon.behavior.message, '我也在這裡陪你。')
+            self.assertEqual(manager.dragon.behavior.message, '我也在这里陪你。')
 
     def test_wayland_explicit_greetings_can_reply_but_automatic_chat_is_disabled(self):
         manager = self.manager
@@ -307,7 +307,7 @@ class ManagerIntegrationTests(unittest.TestCase):
             manager.qpet.greet()
             delayed.assert_called_once()
             delayed.call_args.args[1]()
-            self.assertEqual(manager.dragon.behavior.message, '我也在這裡陪你。')
+            self.assertEqual(manager.dragon.behavior.message, '我也在这里陪你。')
         self.assertFalse(manager.interaction_ready())
 
     def test_context_menu_greetings_use_shared_greeting_flow(self):
@@ -503,7 +503,7 @@ class ManagerIntegrationTests(unittest.TestCase):
                         if source is manager.dragon:
                             self.assertEqual(manager.qpet.message, '我也在，和你一起！')
                         else:
-                            self.assertEqual(manager.dragon.behavior.message, '我也在這裡陪你。')
+                            self.assertEqual(manager.dragon.behavior.message, '我也在这里陪你。')
                         self.assertFalse(manager.interaction_ready())
 
     def test_click_reply_rechecks_busy_hidden_and_dragging_before_delayed_response(self):

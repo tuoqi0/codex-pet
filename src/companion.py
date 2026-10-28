@@ -36,7 +36,7 @@ class CompanionSettings:
     @classmethod
     def from_dict(cls, value):
         if not isinstance(value, dict):
-            raise ValueError('陪伴設定應為物件')
+            raise ValueError('陪伴设定应为物件')
         names = cls.__dataclass_fields__
         data = {key: val for key, val in value.items() if key in names}
         result = cls(**data)
@@ -46,31 +46,31 @@ class CompanionSettings:
     def validate(self):
         for key in ('enabled', 'breaks', 'water', 'meals', 'greetings', 'weather_enabled'):
             if not isinstance(getattr(self, key), bool):
-                raise ValueError(f'{key} 必須是布林值')
+                raise ValueError(f'{key} 必须是布林值')
         for key in ('break_minutes', 'water_minutes', 'greeting_minutes'):
             val = getattr(self, key)
             if isinstance(val, bool) or not isinstance(val, int) or not 15 <= val <= 1440:
-                raise ValueError(f'{key} 必須介於 15 和 1440 分鐘')
+                raise ValueError(f'{key} 必须介于 15 和 1440 分钟')
         for key in ('quiet_start', 'quiet_end', 'lunch_time', 'dinner_time'):
             _parse_time(getattr(self, key))
         if not isinstance(self.weather_label, str) or len(self.weather_label) > 80:
-            raise ValueError('天氣地點名稱無效')
+            raise ValueError('天气地点名称无效')
         for key, limit in (('weather_latitude', 90), ('weather_longitude', 180)):
             val = getattr(self, key)
             if val is not None and (isinstance(val, bool) or not isinstance(val, (int, float))
                                     or not math.isfinite(val) or abs(val) > limit):
-                raise ValueError(f'{key} 超出有效範圍')
+                raise ValueError(f'{key} 超出有效范围')
         if self.weather_enabled and (self.weather_latitude is None or self.weather_longitude is None):
-            raise ValueError('啟用天氣需要明確設定經緯度')
+            raise ValueError('启用天气需要明确设定经纬度')
 
 
 def _parse_time(value):
     if not isinstance(value, str) or len(value) != 5 or value[2] != ':' or not (value[:2] + value[3:]).isdigit():
-        raise ValueError('時間須為 HH:MM')
+        raise ValueError('时间须为 HH:MM')
     try:
         return clock_time(int(value[:2]), int(value[3:]))
     except ValueError as exc:
-        raise ValueError('時間須為有效的 HH:MM') from exc
+        raise ValueError('时间须为有效的 HH:MM') from exc
 
 
 class CompanionSettingsStore:
@@ -120,11 +120,11 @@ class CompanionScheduler:
     SUSPEND_GAP = 5 * 60
     MEAL_WINDOW = 90 * 60
     MESSAGES = {
-        'break': ('我陪你有一陣子了，要不要起身舒展一下？', '休息一下眼睛，活動活動肩膀吧。', '我們一起停一小會兒，換個姿勢吧。'),
-        'water': ('想起來提醒你，方便的話喝點水吧。', '給自己倒杯水，慢慢喝一口吧。', '我來陪你喝水時間，不著急哦。'),
-        'lunch': ('到午餐時間附近啦，記得照顧自己。', '如果還沒吃午飯，找個空檔吃點東西吧。'),
-        'dinner': ('晚餐時間附近啦，別忘了照顧自己。', '忙完這一點，記得留時間吃晚飯哦。'),
-        'greeting': ('我在這裡陪著你，需要我時叫我哦。', '希望今天也有一點讓你開心的小事。', '慢慢來，我們一起。'),
+        'break': ('我陪你有一阵子了，要不要起身舒展一下？', '休息一下眼睛，活动活动肩膀吧。', '我们一起停一小会儿，换个姿势吧。'),
+        'water': ('想起来提醒你，方便的话喝点水吧。', '给自己倒杯水，慢慢喝一口吧。', '我来陪你喝水时间，不着急哦。'),
+        'lunch': ('到午餐时间附近啦，记得照顾自己。', '如果还没吃午饭，找个空档吃点东西吧。'),
+        'dinner': ('晚餐时间附近啦，别忘了照顾自己。', '忙完这一点，记得留时间吃晚饭哦。'),
+        'greeting': ('我在这里陪着你，需要我时叫我哦。', '希望今天也有一点让你开心的小事。', '慢慢来，我们一起。'),
     }
     ACTIONS = {'break': 'break', 'water': 'water', 'lunch': 'meal', 'dinner': 'meal', 'greeting': 'greeting'}
 
@@ -151,7 +151,7 @@ class CompanionScheduler:
 
     def snooze(self, now, minutes=60):
         if not 1 <= minutes <= 1440:
-            raise ValueError('暫停時間須介於 1 和 1440 分鐘')
+            raise ValueError('暂停时间须介于 1 和 1440 分钟')
         self.paused_until = now + minutes * 60
         self._reset_intervals(self.paused_until)
         self.next_allowed = self.paused_until + self.FIRST_PROMPT_DELAY
@@ -165,7 +165,7 @@ class CompanionScheduler:
 
     def tick(self, now, wall, available=True):
         if not isinstance(wall, datetime):
-            raise ValueError('wall 必須是本地 datetime')
+            raise ValueError('wall 必须是本地 datetime')
         elapsed = now - self.last_tick
         self.last_tick = now
         # Sleep/resume or a restarted monotonic clock must not flood the user.

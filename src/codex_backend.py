@@ -218,7 +218,7 @@ class AppServer:
         try:
             if on_spawn is not None:
                 on_spawn(self.process)
-            self.request('initialize', {'clientInfo': {'name': 'codex_pet', 'title': 'Codex Pet', 'version': '2.10.0'}, 'capabilities': {'experimentalApi': True}})
+            self.request('initialize', {'clientInfo': {'name': 'codex_pet', 'title': 'Codex Pet', 'version': '2.11.0'}, 'capabilities': {'experimentalApi': True}})
             self.write({'method': 'initialized', 'params': {}})
         except Exception:
             self.close()
@@ -291,8 +291,14 @@ class AppServer:
             if method in ('item/commandExecution/requestApproval', 'item/fileChange/requestApproval',
                           'item/permissions/requestApproval', 'item/tool/requestUserInput'):
                 if self.mode == 'plan' and method != 'item/tool/requestUserInput':
-                    result = {'permissions': {}} if method == 'item/permissions/requestApproval' else {'decision': 'decline'}
-                    self.write({'id': request_id, 'result': result})
+                    allowed = params.get('availableDecisions') if method == 'item/commandExecution/requestApproval' else None
+                    if allowed is not None and (not isinstance(allowed, list) or not any(
+                            decision in allowed for decision in ('decline', 'cancel'))):
+                        self.write({'id': request_id, 'error': {'code': -32601, 'message': 'No supported denial decision'}})
+                    else:
+                        decision = 'cancel' if allowed is not None and 'decline' not in allowed else 'decline'
+                        result = {'permissions': {}} if method == 'item/permissions/requestApproval' else {'decision': decision}
+                        self.write({'id': request_id, 'result': result})
                 else:
                     self.pending_approvals[request_id] = (method, params)
                     self.emit('approval', {'id': request_id, 'method': method, 'params': params})
@@ -369,9 +375,15 @@ class AppServer:
             permissions = params.get('permissions', {}) if decision == 'accept' else {}
             payload = {'id': request_id, 'result': {'permissions': permissions, 'scope': 'turn'}}
         else:
-            if decision not in ('accept', 'decline', 'cancel'):
-                raise ValueError('Invalid approval decision')
-            payload = {'id': request_id, 'result': {'decision': decision}}
+            if decision == 'unsupported' and method == 'item/commandExecution/requestApproval':
+                payload = {'id': request_id, 'error': {'code': -32601, 'message': 'No supported approval decision selected'}}
+            else:
+                if decision not in ('accept', 'decline', 'cancel'):
+                    raise ValueError('Invalid approval decision')
+                allowed = params.get('availableDecisions') if method == 'item/commandExecution/requestApproval' else None
+                if allowed is not None and (not isinstance(allowed, list) or decision not in allowed):
+                    raise ValueError('This decision was not offered by Codex')
+                payload = {'id': request_id, 'result': {'decision': decision}}
         self.write(payload)
         del self.pending_approvals[request_id]
 
@@ -694,7 +706,9 @@ class Backend:
                         for mime, _, data in images]
         inputs = self.history + [{'role': 'user', 'content': content}]
         response = requests.post(RESOURCE + '/responses', headers=headers,
-            json={'model': model or models[0]['slug'], 'input': inputs, 'store': False, 'stream': True},
+            json={'model': model or models[0]['slug'], 'input': inputs, 'store': False, 'stream': True,
+                  'instructions': ('默认用简体中文回复；如果用户要求其他语言或文字，遵从用户的要求。'
+                                   '保留代码、引用和专有名称的原文。')},
             stream=True, timeout=(30, 30))
         self.response = response
         try:
@@ -818,7 +832,13 @@ class Backend:
                     cursor = catalog.get('nextCursor')
                     if not cursor:
                         break
-            turn_input = [{'type': 'text', 'text': text}] if text else []
+            # This is a separate user-level preference, not a replacement for the
+            # Codex session's developer instructions. It appears in shared history.
+            turn_input = [{'type': 'text', 'text':
+                           '桌宠语言偏好：默认用简体中文回复；如果本轮用户要求其他语言或文字，请遵从。'
+                           '保留代码、引用和专有名称的原文。'}]
+            if text:
+                turn_input.append({'type': 'text', 'text': text})
             if images:
                 snapshots = tempfile.TemporaryDirectory(prefix='codex-pet-images-')
                 for index, (_, suffix, data) in enumerate(images):

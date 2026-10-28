@@ -1,126 +1,61 @@
 # Codex Pet
 
-A desktop companion with an original dragon character and an optional Q-style
-white dragon. Both windows are independently draggable and share a conversation,
-task and quota panel. The seated dragon follows the supplied reference, blinks,
-greets, reacts happily, drinks tea and reads while working. Her wings and tail
-sway through a mesh warp of the flat illustration;
-they are not independently rigged. Dragging tilts the current pose with the
-pointer and gently settles on release. Patrol moves the figure as a whole.
+Codex Pet 是一款桌面伙伴，包含原创龙娘和可选的 Q 版白龙。两个角色可以分别拖动，共享对话、任务和额度面板。坐姿龙娘参考了用户提供的形象，可以眨眼、打招呼、开心、喝茶和在工作时阅读。她的翅膀和尾巴通过单张图片的网格变形摆动，目前还没有独立的骨骼或分层动画；拖动时角色会随指针倾斜，松手后逐渐回稳。巡游功能移动的是整个角色。
 
-## Install or upgrade
+## 安装或升级
 
-Build with `./build-deb.sh`. Install the resulting package with:
+运行 `./build-deb.sh` 构建，然后安装生成的包。例如，若生成的版本是 2.11.0：
 
 ```sh
-sudo apt install ./dist/codex-pet_2.10.0_all.deb
+sudo apt install ./dist/codex-pet_2.11.0_all.deb
 ```
 
-Quit an already-running older version through its right-click menu before
-starting the new version. Open **Codex Pet** from the application menu, or run
-`codex-pet` in a terminal. The package depends on PyQt5, Pillow, Requests,
-PyJWT and cryptography; apt installs these dependencies.
+安装其他版本时，请将命令中的文件名改为 `dist` 目录中实际生成的文件名。启动新版前，请通过旧桌宠的右键菜单退出旧进程，然后从应用菜单打开 **Codex Pet**，或在终端运行 `codex-pet`。安装包依赖 PyQt5、Pillow、Requests、PyJWT 和 cryptography，由 apt 安装这些依赖。
 
-The third-party Q character art is not redistributed in the package or Git.
-To use the copy already supplied by the user, import it once:
+第三方 Q 版角色素材不会放入安装包或 Git 仓库。将用户提供的压缩包放在当前目录后，可执行一次导入：
 
 ```sh
-codex-pet-import /home/tq/codex-pet.tar.xz
+codex-pet-import ./codex-pet.tar.xz
 ```
 
-This imports only the character's WebP files, catalogue and provenance into
-`${XDG_DATA_HOME:-$HOME/.local/share}/codex-pet/bailong`. It refuses to overwrite
-an existing directory. Restart the pet after importing. If the art is absent or
-unusable, the original dragon still runs, and the terminal shows a reason.
+如果压缩包不在当前目录，请将参数替换为该文件的实际路径。导入程序只会将角色的 WebP 文件、素材清单和来源信息写入 `${XDG_DATA_HOME:-$HOME/.local/share}/codex-pet/bailong`，不会覆盖已有目录。导入后请重启桌宠。素材缺失或不可用时，龙娘仍可运行，终端会显示原因。
 
-## Interaction
+## 角色互动
 
-- Click either character for a greeting; double-click to open the floating
-  controls with Codex quota, chat, plan, task and companion settings. Drag to
-  move it. The Q character
-  plays drag and landing sequences; its animations use the catalogue's timing
-  and alignment. The player keeps one Q animation source and one displayed frame at a time; the WebP decoder may use additional working memory.
-- Right-click either character to open the shared panel, view quota, change that
-  character's size, hide or restore the other character, or quit. The final
-  visible character cannot be hidden so the controls remain accessible.
-- The dragon has an optional desktop patrol. Q
-  animations for work, completion and quota are connected to panel events. When
-  both are visible, nearby and idle on X11, they take turns initiating short
-  conversations and can respond to a user greeting the other character.
-  Automatic proximity interaction is disabled on Wayland, where absolute
-  window positions are not reliable. Quiet hours and snoozing suppress
-  spontaneous messages; clicking a character can still prompt a reply.
-- Window size, visibility, patrol and X11 positions are saved locally after
-  explicit changes. Wayland determines placement and does not save coordinates.
+- 单击任意角色可打招呼；双击打开浮动面板，查看 Codex 额度，并进入聊天、计划、任务或陪伴设置。拖动可移动角色。Q 版角色在拖动和落地时播放相应动作，动画时长和对齐方式来自素材清单。播放器同时只保留一个 Q 版动画源和一张显示帧；WebP 解码器可能使用额外工作内存。
+- 右键任意角色可打开共享面板、查看额度、调整该角色大小、隐藏或恢复另一角色，或退出。最后一个可见角色不能隐藏，以便继续使用控件。
+- 龙娘支持可选的桌面巡游；Q 版的工作、完成和额度动作会响应面板事件。在 X11 下，当两个角色可见、位置接近且处于空闲状态时，会轮流发起简短对话；用户向其中一个角色打招呼时，另一个也可以回应。Wayland 无法可靠获取窗口绝对位置，因此关闭基于距离的自动互动。安静时间和暂停提醒会抑制主动消息，但点击角色仍可获得回应。
+- 用户更改后，窗口大小、显示状态、巡游状态及 X11 位置会保存在本机。Wayland 由桌面合成器决定位置，不保存坐标。
 
-Companion settings offer optional rest, water, meal and greeting reminders,
-quiet hours and a one-hour snooze. Reminders use the pet's runtime and the
-local clock; they do not monitor activity or know whether someone is working,
-drinking or eating. Weather is disabled until a city is explicitly searched
-and selected in settings. Queries go to Open-Meteo and report model time and
-source; the app does not use automatic location detection. The floating panel
-offers manual weather refresh. Quiet hours suppress spoken prompts, not weather
-data refreshes.
+陪伴设置提供休息、喝水、用餐和问候提醒，以及安静时间和暂停一小时功能。提醒根据桌宠运行时间和本地时钟计算，不监控活动，也不知道用户是否正在工作、喝水或用餐。天气默认关闭，需要在设置中主动搜索并选择城市后才会查询。天气数据来自 Open-Meteo，界面显示来源和模型时间；应用不会自动定位。浮动面板提供手动刷新天气的入口。安静时间会抑制主动提示，但不会停止天气数据刷新。
 
-Transparent windows require a desktop compositor; transparent portions can
-still receive clicks and a window manager can ignore always-on-top hints. On
-native Wayland automatic patrol is disabled, and dragging uses the compositor's
-system move; its availability and window positioning depend on the compositor.
+透明窗口需要桌面合成器。在支持 XShape 的 X11 环境中，角色透明区域可以让点击穿透，角色本身仍可互动；其他环境会回退到普通窗口行为。窗口管理器也可能忽略置顶提示。在原生 Wayland 下，自动巡游关闭，拖动依赖合成器提供的窗口移动功能；其可用性和窗口位置取决于所用桌面环境。
 
-## Chat, planning, tasks and usage
+## 对话、计划、任务与用量
 
-Open **對話與任務** or **查看額度** from either character's right-click menu.
-The three modes explicitly use different routes:
+通过任一角色的右键菜单打开 **对话与任务** 或 **查看额度**。三种模式分别使用以下方式：
 
-- **普通對話** uses this app's Sign in with ChatGPT authorization and sends a
-  streamed text request without local tools.
-- **計劃** uses that authorization with Codex App Server in Plan mode and a
-  read-only sandbox. Select a work directory first. The plan server uses a
-  separate configuration directory, with external integrations disabled.
-- **任務** uses the existing Codex ChatGPT login, asks for a work directory,
-  and exposes supported approval requests. An API-key login is rejected.
+- **普通对话**：使用本应用的 Sign in with ChatGPT 授权，流式发送文本请求，不使用本地工具。
+- **计划**：使用同一授权，通过 Codex App Server 的 Plan 模式和只读沙箱运行；请先选择工作目录。计划服务使用独立配置目录，关闭外部集成。
+- **任务**：使用已登录的 Codex ChatGPT 账户，要求选择工作目录，并显示受支持的审批请求。API key 登录会被拒绝。
 
-Click **登入 ChatGPT** to authorize this application in a browser. Credentials
-are stored in `~/.config/codex-pet/` with owner-only file permissions, separate
-from Codex's own credentials. If available, email addresses are compared; a
-mismatch is rejected. An absent email or unverified workspace is reported, not
-treated as a verified match. The panel lists models returned for each route and
-offers supported reasoning levels for Codex task models.
+点击 **登录 ChatGPT**，在浏览器中授权本应用。凭据保存在 `~/.config/codex-pet/`，文件权限仅允许所有者访问，与 Codex 自身凭据分开。若双方都返回邮箱，应用会比较邮箱并拒绝不匹配的账户；缺少邮箱或无法验证工作区时会明确提示，不会视为已验证匹配。面板列出各渠道返回的模型，并提供 Codex 任务模型支持的推理强度。
 
-In task mode, **選擇 Codex 對話** lists local Codex sessions on request. Select a
-session to read its messages; use **刷新已選對話** to fetch later messages without
-sending a task or replacing an unsent draft. Explicitly choose permissions for the
-next turn before continuing. The app checks the returned sandbox and approval
-policy; it does not infer the old session's permissions. Avoid running two
-clients on the same session at once. ChatGPT authorization does not grant access
-to ChatGPT web conversation history, so ordinary chat cannot synchronize that
-history. Ordinary chat, plan and task retain separate contexts. Automatic follow
-checks only the selected Codex session about every 30 seconds while the panel is
-visible and idle; it can be turned off in the panel.
+在任务模式下，**选择 Codex 对话**会按需列出本机 Codex 会话。选择后可以读取消息；**刷新已选对话**会获取后续消息，不发送任务，也不替换尚未发送的草稿。继续任务前，需要明确选择本次权限；应用会检查返回的沙箱和审批策略，不推断原会话权限。请避免两个客户端同时操作同一会话。ChatGPT 授权不提供 ChatGPT 网站的对话历史，因此普通对话不能同步该历史；普通对话、计划和任务各自保留上下文。自动跟随只在面板显示且空闲时约每 30 秒检查一次已选择的 Codex 会话，可以在面板中关闭。
 
-Use **圖片** to attach up to four explicitly selected static PNG, JPEG, WebP
-or GIF files to a message. A single image is limited to 10 MiB and each request
-to 20 MiB. Images are sent only when you submit the message; the selected model
-and account must support image input. Ordinary chat keeps its current dialogue
-and images in memory and resends them with later requests until a new chat or
-application exit. Plan and task use
-private temporary image snapshots that are removed after the request completes.
+默认回复语言为简体中文；当前消息明确指定的其他语言优先，代码、引用和名称保留原文。计划和任务模式每轮会将这一偏好作为单独的用户级文本项发送，并显示在共享的 Codex 历史中；它不会替换会话的开发者指令。
 
-All three routes use ChatGPT plan access; none silently falls back to an API
-key. Plan usage may share Codex or application limits, and purchased ChatGPT
-credits can apply according to account settings. Codex quota is displayed only
-when returned by App Server; the usage settings link opens ChatGPT's controls.
-The authorized plan route is subject to OpenAI's eligibility and preview
-limitations. Authorization does not grant access to ChatGPT conversation history.
+通过 **图片**可以为一条消息附加最多四张用户明确选取的静态 PNG、JPEG、WebP 或 GIF 图片。单张图片上限为 10 MiB，每次请求总上限为 20 MiB。只有提交消息时才会上传图片，所选模型和账户必须支持图片输入。普通对话将当前对话和图片保留在内存中，并在后续请求中再次发送，直到开始新对话或退出应用。计划和任务使用私有临时图片副本，请求结束后删除。
 
-## Development
+三种渠道均使用 ChatGPT 计划访问，不会静默切换到 API key。计划用量可能与 Codex 或应用限制共享；购买的 ChatGPT 点数是否适用取决于账户设置。Codex 额度只在 App Server 返回时显示；用量设置链接会打开 ChatGPT 的设置页面。授权计划渠道受 OpenAI 的资格和预览限制约束，授权不提供 ChatGPT 对话历史。
 
-Run `/usr/bin/python3 src/codex_pet.py`. Tests:
+## 开发与测试
+
+运行 `/usr/bin/python3 src/codex_pet.py` 启动桌宠。运行测试：
 
 ```sh
 /usr/bin/python3 -m unittest discover -s tests -v
 QT_QPA_PLATFORM=offscreen /usr/bin/python3 src/codex_pet.py --quit-after-ms 4000
 ```
 
-The generated seated-dragon PNG poses in `assets/` are included in the package.
-User-imported Q art remains outside the package and its original permissions apply.
+`assets/` 中生成的坐姿龙娘 PNG 姿势包含在安装包内。用户自行导入的 Q 版素材保留在安装包之外，并遵守其原有许可。
