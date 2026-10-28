@@ -1,14 +1,14 @@
-"""Local motion for the seated dragon illustration.
+"""Pose-independent wing layers and localized tail motion for the seated dragon.
 
-The supplied artwork is a single flattened image, not a character rig.  This
-inverse mesh displaces only regions near the wings and tail; it cannot reveal
-parts hidden behind them.  The small, smoothly varying field avoids moving the
-face and knees and leaves a transparent margin for the tail's motion.
+The source illustration is flattened, so the exposed wings are separated into
+registered image layers with a small painted underlay behind the foreground.
+The tail remains a localized mesh deformation of the original figure.
 """
 import math
 from functools import lru_cache
+from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageChops, ImageDraw
 from PyQt5.QtGui import QImage, QPixmap
 
 
@@ -32,32 +32,11 @@ def _band(start, rise, fall, end, value):
 
 
 @lru_cache(maxsize=4096)
-def _motion_weights(x, y):
-    """Cache the position-only weights shared by every frame and pose."""
+def _tail_weight(x, y):
+    """Position-only weight shared by every tail frame and pose."""
     width, height = _ART_SIZE
     nx, ny = (x - _MARGIN_X) / width, (y - _MARGIN_Y) / height
-    left = _band(.10, .18, .30, .39, ny) * (1.0 - _smoothstep(.36, .49, nx))
-    # Broad ramps let the right wing and tail travel farther without folding
-    # the mesh; the left wing remains limited by the adjacent knee.
-    right = _band(-.10, .23, .35, .56, ny) * _smoothstep(.69, .82, nx)
-    tail = _band(.38, .68, 1.00, 1.30, ny) * _smoothstep(.68, .86, nx)
-    return left, right, tail
-
-
-def _source_point(x, y, phase):
-    """Map an output point to its source; units x/y are padded-canvas pixels."""
-    width, height = _ART_SIZE
-    left, right, tail = _motion_weights(x, y)
-    # Each wing follows its own delayed arc rather than shifting as a rigid
-    # strip. The cross-axis movement is intentionally small: the source art
-    # is flattened and large rotations would tear the overlap near the body.
-    left_phase = math.sin(phase)
-    right_phase = math.sin(phase - .45)
-    tail_phase = math.sin(phase + .8)
-    wing_x = width * .006 * (-left * left_phase + right * right_phase)
-    return (x + wing_x + width * .045 * tail * tail_phase,
-            y + height * (.04 * left * left_phase + .075 * right * right_phase)
-            + height * .045 * tail * tail_phase)
+    return _band(.38, .68, 1.00, 1.30, ny) * _smoothstep(.68, .86, nx)
 
 
 def _prepare_art(path):
@@ -74,6 +53,61 @@ def _prepare_art(path):
     return canvas
 
 
+@lru_cache(maxsize=1)
+def _wing_assets():
+    folder = Path(__file__).resolve().parent
+    if not (folder / 'wing-cutout.png').exists():
+        folder = folder.parent / 'assets'
+    return tuple(Image.open(folder / name).copy() for name in
+                 ('wing-cutout.png', 'wing-underlay.png', 'wing-left.png', 'wing-right.png'))
+
+
+def _tail_source_point(x, y, phase):
+    tail = _tail_weight(x, y)
+    sway = math.sin(phase + .8)
+    return (x + _ART_SIZE[0] * .045 * tail * sway,
+            y + _ART_SIZE[1] * .045 * tail * sway)
+
+
+def _wing_displacement(index, side):
+    """Vertices depend on the animation phase, not the selected pose."""
+    phase = 2 * math.pi * index / _FRAME_COUNT
+    t = phase if side == 0 else phase - .45
+    x, y = (785, 350) if side == 0 else (1210, 380)
+    cx = _MARGIN_X + _ART_SIZE[0] * x / 1671
+    cy = _MARGIN_Y + _ART_SIZE[1] * y / 941
+    amplitude = 5 if side == 0 else 10
+    width, height = _ART_SIZE[0] + 2 * _MARGIN_X, _ART_SIZE[1] + 2 * _MARGIN_Y
+    xs = [round(width * n / _COLUMNS) for n in range(_COLUMNS + 1)]
+    ys = [round(height * n / _ROWS) for n in range(_ROWS + 1)]
+    def at(x, y):
+        distance = math.hypot(x - cx, y - cy)
+        weight = _smoothstep(5, 35, distance)
+        y += amplitude * math.sin(t) * weight
+        angle = math.radians((5 if side == 0 else -5) * math.sin(t))
+        cosine, sine = math.cos(angle), math.sin(angle)
+        dx, dy = x - cx, y - cy
+        return (cx + cosine * dx - sine * dy, cy + sine * dx + cosine * dy)
+    points = [[at(x, y) for y in ys] for x in xs]
+    return [((x0, y0, x1, y1), (*points[xi][yi], *points[xi][yi + 1], *points[xi + 1][yi + 1], *points[xi + 1][yi]))
+            for xi, (x0, x1) in enumerate(zip(xs, xs[1:]))
+            for yi, (y0, y1) in enumerate(zip(ys, ys[1:]))]
+
+
+@lru_cache(maxsize=_FRAME_COUNT)
+def _wing_background(index):
+    """Cache pose-independent wing layers after compositing once per phase."""
+    _, underlay, left, right = _wing_assets()
+    composed = underlay.copy()
+    foreground_guard = Image.new('L', underlay.size, 255)
+    ImageDraw.Draw(foreground_guard).rectangle((145, 115, 205, 175), fill=0)
+    for wing, side in ((left, 0), (right, 1)):
+        wing = wing.transform(underlay.size, Image.Transform.MESH, _wing_displacement(index, side), Image.Resampling.BICUBIC)
+        wing.putalpha(ImageChops.multiply(wing.getchannel('A'), foreground_guard))
+        composed.alpha_composite(wing)
+    return composed
+
+
 def motion_frames(path):
     """Return twenty-four QPixmaps in one consistent, transparent padded canvas.
 
@@ -84,19 +118,25 @@ def motion_frames(path):
     width, height = original.size
     xs = [round(width * n / _COLUMNS) for n in range(_COLUMNS + 1)]
     ys = [round(height * n / _ROWS) for n in range(_ROWS + 1)]
+    total_mask, _, _, _ = _wing_assets()
+    alpha = original.getchannel('A')
+    body = original.copy()
+    body.putalpha(ImageChops.multiply(alpha, ImageChops.invert(total_mask)))
     frames = []
     for index in range(_FRAME_COUNT):
         phase = 2 * math.pi * index / _FRAME_COUNT
         mesh = []
         # Adjacent cells share corners. Evaluate each vertex once per frame
         # instead of recalculating each corner for every neighbouring cell.
-        points = [[_source_point(x, y, phase) for y in ys] for x in xs]
+        points = [[_tail_source_point(x, y, phase) for y in ys] for x in xs]
         for xi, (x0, x1) in enumerate(zip(xs, xs[1:])):
             for yi, (y0, y1) in enumerate(zip(ys, ys[1:])):
                 quad = (*points[xi][yi], *points[xi][yi + 1],
                         *points[xi + 1][yi + 1], *points[xi + 1][yi])
                 mesh.append(((x0, y0, x1, y1), quad))
-        warped = original.transform(original.size, Image.Transform.MESH, mesh,
+        composed = _wing_background(index).copy()
+        composed.alpha_composite(body)
+        warped = composed.transform(original.size, Image.Transform.MESH, mesh,
                                     resample=Image.Resampling.BICUBIC)
         image = QImage(warped.tobytes(), width, height, width * 4, QImage.Format_RGBA8888).copy()
         frames.append(QPixmap.fromImage(image))

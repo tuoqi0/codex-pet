@@ -183,6 +183,7 @@ def discover_codex(home=None):
 class AppServer:
     def __init__(self, emit, token=None, executable=None, stop_event=None, process_factory=None):
         self.emit = emit
+        self.server_id = uuid.uuid4().hex
         self.stop_event = stop_event
         binary = executable or discover_codex()
         if not binary:
@@ -225,11 +226,14 @@ class AppServer:
         self.pending_command_snapshots = {}
         self.pending_patch_snapshots = {}
         self.event_lock = threading.RLock()
+        self.queued_server_requests = set()
+        self.resolved_queued_requests = set()
+        self.reader_closed = False
         self.completed_turns = {}
         self.mode = None
         threading.Thread(target=self._read, daemon=True).start()
         try:
-            self.request('initialize', {'clientInfo': {'name': 'codex_pet', 'title': 'Codex Pet', 'version': '2.17.0'}, 'capabilities': {'experimentalApi': True}})
+            self.request('initialize', {'clientInfo': {'name': 'codex_pet', 'title': 'Codex Pet', 'version': '2.18.0'}, 'capabilities': {'experimentalApi': True}})
             self.write({'method': 'initialized', 'params': {}})
         except Exception:
             self.close()
@@ -239,10 +243,23 @@ class AppServer:
         try:
             for line in self.process.stdout:
                 try:
-                    self.events.put(json.loads(line))
+                    event = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                if event.get('method') == 'serverRequest/resolved':
+                    # Invalidate as soon as the reader receives the notification;
+                    # otherwise the GUI can approve while the event waits in the queue.
+                    self.handle(event)
+                    continue
+                if 'id' in event and event.get('method'):
+                    key = ((event.get('params') or {}).get('threadId'), event['id'])
+                    with self.event_lock:
+                        self.queued_server_requests.add(key)
+                self.events.put(event)
         finally:
+            with self.event_lock:
+                self.reader_closed = True
+                self.invalidate_approvals()
             self.events.put(None)
 
     def write(self, payload):
@@ -351,6 +368,15 @@ class AppServer:
         params = event.get('params') or {}
         if 'id' in event and method:
             request_id = event['id']
+            key = (params.get('threadId'), request_id)
+            getattr(self, 'queued_server_requests', set()).discard(key)
+            resolved = getattr(self, 'resolved_queued_requests', set())
+            if key in resolved:
+                resolved.discard(key)
+                return method
+            if (getattr(self, 'reader_closed', False) or
+                    getattr(self, 'stop_event', None) and self.stop_event.is_set()):
+                return method
             if method in ('item/commandExecution/requestApproval', 'item/fileChange/requestApproval',
                           'item/permissions/requestApproval', 'item/tool/requestUserInput'):
                 if self.mode == 'plan' and method != 'item/tool/requestUserInput':
@@ -365,6 +391,8 @@ class AppServer:
                 else:
                     self.pending_approvals[request_id] = (method, params)
                     payload = {'id': request_id, 'method': method, 'params': params}
+                    if getattr(self, 'server_id', None):
+                        payload['serverId'] = self.server_id
                     if method == 'item/commandExecution/requestApproval':
                         item = getattr(self, 'command_items', {}).get(self._patch_key(params))
                         payload['command_item'] = dict(item) if item else None
@@ -384,10 +412,20 @@ class AppServer:
                 # Do not guess response shapes or grant unknown requests.
                 self.write({'id': request_id, 'error': {'code': -32601, 'message': 'Unsupported request'}})
                 self.emit('status', '不支持的 Codex 请求已拒绝：' + method)
+        elif method == 'serverRequest/resolved':
+            key = (params.get('threadId'), params.get('requestId'))
+            if key in getattr(self, 'queued_server_requests', set()):
+                self.resolved_queued_requests.add(key)
+            pending = self.pending_approvals.get(key[1])
+            if pending and pending[1].get('threadId') == key[0]:
+                self._invalidate_approval(key[1], key[0])
         elif method == 'turn/completed':
             turn = params.get('turn', {})
             self.completed_turns[turn.get('id')] = turn
             thread_id, turn_id = params.get('threadId'), turn.get('id')
+            for request_id, (_, approval) in list(self.pending_approvals.items()):
+                if approval.get('threadId') == thread_id and approval.get('turnId') == turn_id:
+                    self._invalidate_approval(request_id, thread_id)
             commands = getattr(self, 'command_items', {})
             for key in list(commands):
                 if key[:2] == (thread_id, turn_id):
@@ -463,6 +501,20 @@ class AppServer:
                                        'item_id': item.get('id'), 'type': kind,
                                        'status': item.get('status'), 'detail': detail})
         return method
+
+    def _invalidate_approval(self, request_id, thread_id):
+        self.pending_approvals.pop(request_id, None)
+        getattr(self, 'pending_patch_snapshots', {}).pop(request_id, None)
+        getattr(self, 'pending_command_snapshots', {}).pop(request_id, None)
+        data = {'id': request_id, 'threadId': thread_id}
+        if getattr(self, 'server_id', None):
+            data['serverId'] = self.server_id
+        self.emit('approval_resolved', data)
+
+    def invalidate_approvals(self):
+        with self.event_lock:
+            for request_id, (_, params) in list(self.pending_approvals.items()):
+                self._invalidate_approval(request_id, params.get('threadId'))
 
     def wake(self):
         """Wake the sole event consumer after a stop request."""
@@ -1102,21 +1154,34 @@ class Backend:
             active = self.active
             response = self.response
         if isinstance(active, AppServer):
+            active.invalidate_approvals()
             active.wake()
         if response is not None:
             threading.Thread(target=response.close, daemon=True).start()
 
-    def approve(self, request_id, decision):
+    def approve(self, request_id, decision, server_id=None):
         with self.active_lock:
             active = self.active
             if self.cancelled.is_set():
                 self.emit('error', '任务正在停止，审批请求已失效。')
                 return
-        if isinstance(active, AppServer):
+            if not isinstance(active, AppServer) or not server_id or active.server_id != server_id:
+                self.emit('error', '审批请求属于已结束的任务。')
+                return
             try:
                 active.approve(request_id, decision)
             except Exception as exc:
                 self.emit('error', str(exc))
+
+    def approval_is_pending(self, request_id, thread_id, server_id):
+        with self.active_lock:
+            active = self.active
+            if (self.cancelled.is_set() or not isinstance(active, AppServer)
+                    or not server_id or active.server_id != server_id):
+                return False
+            with active.event_lock:
+                pending = active.pending_approvals.get(request_id)
+                return bool(pending and pending[1].get('threadId') == thread_id)
 
     def close(self):
         with self.active_lock:

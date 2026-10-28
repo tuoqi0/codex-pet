@@ -137,19 +137,30 @@ class DragonMotionTests(unittest.TestCase):
         self.assertGreaterEqual(max(b[2] for b in tail) - min(b[2] for b in tail), 12)
 
     def test_wings_and_tail_have_distinct_motion_phases(self):
-        # The left wing is at rest at the start of the cycle. The other
-        # wing and the tail should already be moving rather than mirroring it.
+        # Test the grids used to render the wings rather than the obsolete
+        # flattened-art field. Their separate delays must produce different
+        # motion at the same frame, while each cycle returns to its origin.
+        first_left = dragon_motion._wing_displacement(0, 0)
+        first_right = dragon_motion._wing_displacement(0, 1)
+        for bounds, points in first_left:
+            x0, y0, x1, y1 = bounds
+            self.assertEqual(points, (x0, y0, x0, y1, x1, y1, x1, y0))
+        self.assertNotEqual(first_right, first_left)
+        for side, initial in ((0, first_left), (1, first_right)):
+            later = dragon_motion._wing_displacement(6, side)
+            self.assertNotEqual(later, initial)
+            cycle = dragon_motion._wing_displacement(dragon_motion._FRAME_COUNT, side)
+            for (bounds, points), (cycle_bounds, cycle_points) in zip(initial, cycle):
+                self.assertEqual(bounds, cycle_bounds)
+                for value, cycle_value in zip(points, cycle_points):
+                    self.assertAlmostEqual(value, cycle_value, places=10)
         w, h = dragon_motion._ART_SIZE
-        mx, my = dragon_motion._MARGIN_X, dragon_motion._MARGIN_Y
-        left = (mx + w * .25, my + h * .24)
-        right = (mx + w * .9, my + h * .24)
-        tail = (mx + w * .95, my + h * .75)
-        self.assertEqual(dragon_motion._source_point(*left, 0), left)
-        self.assertNotEqual(dragon_motion._source_point(*right, 0), right)
-        self.assertNotEqual(dragon_motion._source_point(*tail, 0), tail)
-        # Wings also have a small horizontal sweep, not only vertical squash.
-        self.assertNotEqual(dragon_motion._source_point(*left, math.pi / 2)[0], left[0])
-        self.assertNotEqual(dragon_motion._source_point(*right, math.pi / 2)[0], right[0])
+        tail = (dragon_motion._MARGIN_X + w * .95, dragon_motion._MARGIN_Y + h * .75)
+        start = dragon_motion._tail_source_point(*tail, 0)
+        self.assertNotEqual(start, tail)
+        self.assertNotEqual(start, dragon_motion._tail_source_point(*tail, math.pi / 2))
+        for value, cycle_value in zip(start, dragon_motion._tail_source_point(*tail, math.tau)):
+            self.assertAlmostEqual(value, cycle_value, places=10)
 
     def test_motion_extents_remain_continuous_at_default_size(self):
         # Include the last-to-first transition: a seamless 24-frame cycle.
@@ -194,18 +205,23 @@ class DragonMotionTests(unittest.TestCase):
         def determinant(a, b, c):
             return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
 
+        def assert_quad(tl, tr, br, bl):
+            for a, b, c in ((tl, tr, bl), (tr, br, tl), (br, bl, tr), (bl, tl, br)):
+                self.assertGreater(determinant(a, b, c), 0)
+
         for index in range(dragon_motion._FRAME_COUNT):
             phase = 2 * math.pi * index / dragon_motion._FRAME_COUNT
+            for side in (0, 1):
+                for _, points in dragon_motion._wing_displacement(index, side):
+                    tl, bl, br, tr = [tuple(points[i:i + 2]) for i in range(0, 8, 2)]
+                    assert_quad(tl, tr, br, bl)
             for x0, x1 in zip(xs, xs[1:]):
                 for y0, y1 in zip(ys, ys[1:]):
-                    tl = dragon_motion._source_point(x0, y0, phase)
-                    tr = dragon_motion._source_point(x1, y0, phase)
-                    bl = dragon_motion._source_point(x0, y1, phase)
-                    br = dragon_motion._source_point(x1, y1, phase)
-                    self.assertGreater(determinant(tl, tr, bl), 0)
-                    self.assertGreater(determinant(tr, br, tl), 0)
-                    self.assertGreater(determinant(br, bl, tr), 0)
-                    self.assertGreater(determinant(bl, tl, br), 0)
+                    tl = dragon_motion._tail_source_point(x0, y0, phase)
+                    tr = dragon_motion._tail_source_point(x1, y0, phase)
+                    bl = dragon_motion._tail_source_point(x0, y1, phase)
+                    br = dragon_motion._tail_source_point(x1, y1, phase)
+                    assert_quad(tl, tr, br, bl)
 
 
 if __name__ == '__main__':

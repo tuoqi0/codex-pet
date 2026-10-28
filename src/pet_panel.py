@@ -410,6 +410,7 @@ class PetPanel(QDialog):
         self.progress_entries = []
         self.progress_plans = {}
         self.progress_mode = None
+        self.approval_contexts = []
         self.bridge = _EventBridge(self)
         self.bridge.received.connect(self._event)
         self.backend = backend_factory(self.bridge.safe_emit)
@@ -1525,6 +1526,21 @@ class PetPanel(QDialog):
             self.limits_changed.emit('limits_error', data)
         elif event == 'approval':
             self._approval(data)
+        elif event == 'approval_resolved':
+            for context in reversed(self.approval_contexts):
+                if (context['id'] == data.get('id') and
+                        context['threadId'] == data.get('threadId') and
+                        context['serverId'] == data.get('serverId')):
+                    context['valid'] = False
+                    dialog = context.get('dialog')
+                    if dialog is None and context is self.approval_contexts[-1]:
+                        dialog = QApplication.activeModalWidget()
+                        if not isinstance(dialog, QInputDialog) or dialog.parent() is not self:
+                            dialog = None
+                    if dialog is not None:
+                        dialog.reject()
+                    self.status.setText('审批请求已失效。')
+                    break
 
     def _idle(self):
         self.busy = False
@@ -1601,6 +1617,29 @@ class PetPanel(QDialog):
     def _approval(self, data):
         if not isinstance(data, dict) or 'id' not in data:
             return
+        thread_id = data.get('params', {}).get('threadId')
+        server_id = data.get('serverId')
+        if isinstance(self.backend, Backend) and not server_id:
+            return
+        pending = getattr(self.backend, 'approval_is_pending', None)
+        if pending and not (pending(data['id'], thread_id, server_id) if server_id
+                            else pending(data['id'], thread_id)):
+            return
+        context = {'id': data['id'], 'threadId': thread_id, 'serverId': server_id,
+                   'valid': True, 'dialog': None}
+        self.approval_contexts.append(context)
+        try:
+            self._present_approval(data, context)
+        finally:
+            self.approval_contexts.remove(context)
+
+    def _present_approval(self, data, context):
+        def decide(decision):
+            if context['valid']:
+                if context['serverId']:
+                    self.backend.approve(data['id'], decision, context['serverId'])
+                else:
+                    self.backend.approve(data['id'], decision)
         method = str(data.get('method', ''))
         if method == 'item/tool/requestUserInput':
             answers = {}
@@ -1624,17 +1663,17 @@ class PetPanel(QDialog):
                         echo = QLineEdit.Password if secret else QLineEdit.Normal
                         value, ok = QInputDialog.getText(self, 'Codex 需要你的回答', prompt, echo)
                     if not ok:
-                        self.backend.approve(data['id'], 'cancel')
+                        decide('cancel')
                         return
                     if not labels or allow_other or value in labels:
                         break
                     prompt = str(question.get('question', '')) + '\n请输入列出的选项。\n' + '\n'.join(labels)
                 answers[str(question.get('id', ''))] = {'answers': [str(value)]}
-            self.backend.approve(data['id'], {'answers': answers})
+            decide({'answers': answers})
             return
         if method not in ('item/commandExecution/requestApproval', 'item/fileChange/requestApproval',
                           'item/permissions/requestApproval'):
-            self.backend.approve(data['id'], 'decline')
+            decide('decline')
             self.status.setText('不支持的审批请求已拒绝：' + method)
             return
         params = data.get('params', {})
@@ -1644,7 +1683,7 @@ class PetPanel(QDialog):
             decision for decision in ('accept', 'decline', 'cancel')
             if isinstance(allowed, list) and decision in allowed)
         if not choices:
-            self.backend.approve(data['id'], 'unsupported')
+            decide('unsupported')
             self.status.setText('此审批的决定选项暂不支持，已拒绝处理。')
             return
         details = json.dumps(params, ensure_ascii=False, indent=2, default=str)
@@ -1673,7 +1712,7 @@ class PetPanel(QDialog):
                 details += '\n\n审批详情不完整，无法在此确认；请拒绝本次请求，再在 Codex 中重新执行并检查。'
                 choices = tuple(choice for choice in choices if choice != 'accept')
                 if not choices:
-                    self.backend.approve(data['id'], 'unsupported')
+                    decide('unsupported')
                     self.status.setText('审批详情不完整，已拒绝处理。')
                     return
         if method == 'item/fileChange/requestApproval':
@@ -1686,6 +1725,7 @@ class PetPanel(QDialog):
                 details += '\n\n文件差异不可用：未收到匹配的完整变更，或变更超过显示限制。请拒绝本次请求，再在 Codex 中重新执行并检查。'
                 choices = tuple(choice for choice in choices if choice != 'accept')
         dialog = QDialog(self)
+        context['dialog'] = dialog
         dialog.setWindowTitle('Codex 请求审批')
         dialog.resize(600, 400)
         layout = QVBoxLayout(dialog)
@@ -1705,7 +1745,7 @@ class PetPanel(QDialog):
         layout.addWidget(buttons)
         dialog.exec_()
         decision = selected[0] if selected else next((value for value in ('decline', 'cancel') if value in choices), 'unsupported')
-        self.backend.approve(data['id'], decision)
+        decide(decision)
 
     def closeEvent(self, event):
         self.hide()
