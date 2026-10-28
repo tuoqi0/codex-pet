@@ -13,7 +13,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-from codex_backend import Backend, MAX_IMAGE_BYTES, MAX_IMAGE_COUNT, MAX_IMAGE_TOTAL_BYTES
+from codex_backend import Backend, MAX_IMAGE_BYTES, MAX_IMAGE_COUNT, MAX_IMAGE_TOTAL_BYTES, PET_LANGUAGE_PREFERENCE
 
 
 def _same_directory(left, right):
@@ -1168,7 +1168,15 @@ class PetPanel(QDialog):
                 kind = item.get('type')
                 if kind == 'userMessage':
                     parts = []
-                    for part in item.get('content', []):
+                    content = item.get('content', [])
+                    # The pet adds this separate leading input item to each
+                    # task turn. Keep the actual Codex history unchanged; omit
+                    # the repeated internal preference only in this display.
+                    if (len(content) > 1 and isinstance(content[0], dict)
+                            and content[0].get('type') == 'text'
+                            and content[0].get('text') == PET_LANGUAGE_PREFERENCE):
+                        content = content[1:]
+                    for part in content:
                         if not isinstance(part, dict):
                             continue
                         if part.get('type') in ('image', 'localImage', 'input_image'):

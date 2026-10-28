@@ -36,6 +36,8 @@ STOP_TIMEOUT_SECONDS = 8
 MAX_HISTORY_PAGES = 100
 MAX_APPROVAL_PATCH_ITEMS = 16
 MAX_APPROVAL_PATCH_CHARS = 256_000
+PET_LANGUAGE_PREFERENCE = ('桌宠语言偏好：默认用简体中文回复；如果本轮用户要求其他语言或文字，请遵从。'
+                           '保留代码、引用和专有名称的原文。')
 
 CHATGPT_ERROR_HINTS = {
     'subscription_sharing_user_not_eligible': '当前账户、工作空间或策略不允许使用 ChatGPT 计划。',
@@ -227,7 +229,7 @@ class AppServer:
         self.mode = None
         threading.Thread(target=self._read, daemon=True).start()
         try:
-            self.request('initialize', {'clientInfo': {'name': 'codex_pet', 'title': 'Codex Pet', 'version': '2.16.0'}, 'capabilities': {'experimentalApi': True}})
+            self.request('initialize', {'clientInfo': {'name': 'codex_pet', 'title': 'Codex Pet', 'version': '2.17.0'}, 'capabilities': {'experimentalApi': True}})
             self.write({'method': 'initialized', 'params': {}})
         except Exception:
             self.close()
@@ -1028,9 +1030,7 @@ class Backend:
                         break
             # This is a separate user-level preference, not a replacement for the
             # Codex session's developer instructions. It appears in shared history.
-            turn_input = [{'type': 'text', 'text':
-                           '桌宠语言偏好：默认用简体中文回复；如果本轮用户要求其他语言或文字，请遵从。'
-                           '保留代码、引用和专有名称的原文。'}]
+            turn_input = [{'type': 'text', 'text': PET_LANGUAGE_PREFERENCE}]
             if text:
                 turn_input.append({'type': 'text', 'text': text})
             if images:

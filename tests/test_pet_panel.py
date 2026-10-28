@@ -1005,6 +1005,31 @@ class PanelTests(unittest.TestCase):
         self.assertIn('[图片]', self.panel.transcript.toPlainText())
         self.assertNotIn('private-snapshot', self.panel.transcript.toPlainText())
 
+    def test_pet_history_omits_only_the_leading_language_preference(self):
+        from codex_backend import PET_LANGUAGE_PREFERENCE
+        self.panel.mode.setCurrentIndex(2)
+        self.panel._open_threads()
+        self.panel.bridge.received.emit('codex_threads', {'data': [{'id': 'two', 'cwd': '/tmp'}]})
+        self.panel.thread_list.setCurrentRow(0)
+        self.panel.thread_open.click()
+        self.panel.bridge.received.emit('codex_thread', {'thread': {'id': 'two', 'cwd': '/tmp', 'turns': [
+            {'items': [
+                {'type': 'userMessage', 'content': [
+                    {'type': 'text', 'text': PET_LANGUAGE_PREFERENCE},
+                    {'type': 'text', 'text': '请检查这个文件'},
+                    {'type': 'localImage', 'path': '/tmp/private-image.png'}]},
+                {'type': 'agentMessage', 'text': '已完成'},
+                {'type': 'userMessage', 'content': [
+                    {'type': 'text', 'text': PET_LANGUAGE_PREFERENCE}]},
+                {'type': 'userMessage', 'content': [
+                    {'type': 'text', 'text': '请保留原文'},
+                    {'type': 'text', 'text': PET_LANGUAGE_PREFERENCE}]},
+            ]}]}})
+        text = self.panel.transcript.toPlainText()
+        self.assertIn('请检查这个文件\n[图片]', text)
+        self.assertEqual(text.count(PET_LANGUAGE_PREFERENCE), 2)
+        self.assertNotIn('private-image.png', text)
+
     def test_selected_history_shows_plan_and_safe_tool_summaries_in_order(self):
         self.panel.mode.setCurrentIndex(2)
         self.assertFalse(any(call[0].startswith('codex_thread') for call in self.panel.backend.calls))
