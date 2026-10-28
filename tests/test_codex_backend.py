@@ -1026,6 +1026,56 @@ for line in sys.stdin:
                       'turnId': ids['turnId'], 'item': {'id': ids['itemId'], 'type': 'commandExecution'}}})
         self.assertFalse(server.command_items)
 
+    def test_stdin_approvals_are_per_request_and_change_invalidates_preview(self):
+        events, sent = [], []
+        server = object.__new__(backend.AppServer)
+        server.emit = lambda *args: events.append(args)
+        server.write = sent.append
+        server.pending_approvals = {}
+        server.mode = 'task'
+        server._stdin_binary_verified = True
+        base = {'kind': 'writeStdin', 'threadId': 't', 'turnId': 'r', 'itemId': 'same',
+                'approvalId': 'a', 'cwd': '/tmp', 'command': "write_stdin --session-id 12 '你好\n'",
+                'availableDecisions': ['accept', 'cancel']}
+        second = dict(base, approvalId='b', command="write_stdin --session-id 12 'different'")
+        server.handle({'id': 1, 'method': 'item/commandExecution/requestApproval', 'params': base})
+        server.handle({'id': 2, 'method': 'item/commandExecution/requestApproval', 'params': second})
+        server.approve(2, 'accept')
+        self.assertEqual(sent[-1]['id'], 2)
+        self.assertEqual(sent[-1]['result']['decision'], 'accept')
+        base['command'] = "write_stdin --session-id 12 'changed'"
+        server.approve(1, 'accept')
+        self.assertEqual(sent[-1]['result']['decision'], 'cancel')
+        self.assertNotIn(1, server.pending_approvals)
+        self.assertFalse(server.pending_stdin_snapshots)
+        for change in ({'approvalId': ''}, {'cwd': ''}, {'itemId': ''},
+                       {'command': "write_stdin --session-id 12 'unterminated"},
+                       {'command': 'write_stdin --session-id 12 ' + 'a' * 256_001}):
+            params = dict(second, **change)
+            server.handle({'id': 3, 'method': 'item/commandExecution/requestApproval', 'params': params})
+            with self.assertRaisesRegex(ValueError, '审批详情不完整'):
+                server.approve(3, 'accept')
+            server.approve(3, 'cancel')
+        server.handle({'method': 'item/started', 'params': {'threadId': 't', 'turnId': 'r',
+                      'item': {'id': 'same', 'type': 'commandExecution', 'command': 'cat', 'cwd': '/tmp'}}})
+        server.handle({'id': 6, 'method': 'item/commandExecution/requestApproval', 'params': second})
+        server.handle({'method': 'item/started', 'params': {'threadId': 't', 'turnId': 'r',
+                      'item': {'id': 'same', 'type': 'commandExecution', 'command': 'changed', 'cwd': '/tmp'}}})
+        server.approve(6, 'accept')
+        self.assertEqual(sent[-1]['result']['decision'], 'cancel')
+        server._stdin_binary_verified = False
+        server.handle({'id': 5, 'method': 'item/commandExecution/requestApproval', 'params': second})
+        self.assertFalse(events[-1][1]['stdin_protocol_verified'])
+        with self.assertRaisesRegex(ValueError, '审批详情不完整'):
+            server.approve(5, 'accept')
+        server.approve(5, 'cancel')
+        server._stdin_binary_verified = True
+        server.handle({'id': 4, 'method': 'item/commandExecution/requestApproval', 'params': second})
+        server.handle({'method': 'serverRequest/resolved', 'params': {'threadId': 't', 'requestId': 4}})
+        with self.assertRaisesRegex(RuntimeError, '已失效'):
+            server.approve(4, 'accept')
+        self.assertFalse(server.pending_stdin_snapshots)
+
     def test_command_approval_checks_shown_snapshot_before_accepting(self):
         events, sent = [], []
         server = object.__new__(backend.AppServer)

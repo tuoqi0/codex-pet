@@ -1,6 +1,7 @@
 """Shared Codex Pet conversation and usage window."""
 import json
 import math
+import unicodedata
 from datetime import datetime
 from pathlib import Path
 
@@ -13,7 +14,15 @@ from PyQt5.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-from codex_backend import Backend, MAX_IMAGE_BYTES, MAX_IMAGE_COUNT, MAX_IMAGE_TOTAL_BYTES, PET_LANGUAGE_PREFERENCE
+from codex_backend import Backend, MAX_IMAGE_BYTES, MAX_IMAGE_COUNT, MAX_IMAGE_TOTAL_BYTES, PET_LANGUAGE_PREFERENCE, stdin_approval_details
+
+
+def _safe_approval_text(value):
+    """Render controls and invisible formatting without changing ordinary Chinese text."""
+    encoded = json.dumps(value, ensure_ascii=False, indent=2, default=str)
+    return ''.join((f'\\u{ord(ch):04x}' if ord(ch) <= 0xffff else f'\\U{ord(ch):08x}')
+                   if unicodedata.category(ch) in ('Cc', 'Cf', 'Cs', 'Zl', 'Zp') and ch not in '\n\t'
+                   else ch for ch in encoded)
 
 
 def _same_directory(left, right):
@@ -1704,22 +1713,34 @@ class PetPanel(QDialog):
             decide('unsupported')
             self.status.setText('此审批的决定选项暂不支持，已拒绝处理。')
             return
-        details = json.dumps(params, ensure_ascii=False, indent=2, default=str)
+        if params.get('kind') == 'writeStdin' and not stdin_approval_details(params):
+            details = '终端输入审批详情不可用或超过显示限制。'
+        else:
+            details = _safe_approval_text(params)
         if method == 'item/commandExecution/requestApproval':
             item = data.get('command_item')
             network = params.get('networkApprovalContext')
             has_command = isinstance(params.get('command'), str) and bool(params['command'])
             has_cwd = isinstance(params.get('cwd'), str) and bool(params['cwd'])
             if isinstance(item, dict):
-                details += '\n\n命令详情（来自同一会话、轮次和项目）：\n' + json.dumps(item, ensure_ascii=False, indent=2)
+                if params.get('kind') == 'writeStdin':
+                    details += '\n\n终端启动时的参考信息（当前进程状态和目录可能已改变）：\n' + _safe_approval_text(item)
+                else:
+                    details += '\n\n命令详情（来自同一会话、轮次和项目）：\n' + _safe_approval_text(item)
                 if not params.get('approvalId'):
                     has_command = has_command or (isinstance(item.get('command'), str) and bool(item['command']))
                 has_cwd = has_cwd or (isinstance(item.get('cwd'), str) and bool(item['cwd']))
             has_network = (isinstance(network, dict) and isinstance(network.get('host'), str)
                            and bool(network['host']) and isinstance(network.get('protocol'), str)
                            and bool(network['protocol']))
-            if params.get('kind', 'command') != 'command':
-                details += '\n\n此终端输入审批暂不支持，请拒绝本次请求，再在 Codex 中重新执行并检查。'
+            if params.get('kind') == 'writeStdin':
+                if not isinstance(item, dict):
+                    details += '\n\n终端启动时的参考信息不可用。'
+                if not data.get('stdin_protocol_verified'):
+                    details += '\n\n当前 Codex 版本的终端输入格式尚未验证，不能允许。'
+                details += '\n\n这是发送到现有终端的输入；请核对完整命令及转义字符。终端当前目录和状态可能已改变。'
+                reviewable = bool(data.get('stdin_protocol_verified') and stdin_approval_details(params))
+            elif params.get('kind', 'command') != 'command':
                 reviewable = False
             elif network is not None:
                 details += '\n\n此请求涉及网络访问；请核对目标主机和协议。'

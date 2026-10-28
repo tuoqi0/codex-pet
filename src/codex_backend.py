@@ -4,6 +4,7 @@ The callback receives (event, data) on a worker thread; UI must marshal it to
 its event loop. Only official ChatGPT OAuth and Codex app-server are used.
 """
 import json
+import hashlib
 from collections import OrderedDict
 from contextlib import contextmanager
 import base64
@@ -11,6 +12,7 @@ import io
 import os
 import platform
 import re
+import shlex
 from pathlib import Path
 import queue
 import shutil
@@ -36,6 +38,35 @@ STOP_TIMEOUT_SECONDS = 8
 MAX_HISTORY_PAGES = 100
 MAX_APPROVAL_PATCH_ITEMS = 16
 MAX_APPROVAL_PATCH_CHARS = 256_000
+# Local loopback verified this exact Linux x86-64 codex-cli 0.162.0-alpha.17.2 binary.
+VERIFIED_STDIN_BINARIES = {"73b73b048546993298234a295de01ef2424e7a8b29def9d0ecb1ca7cb77500d4"}
+
+
+def stdin_approval_details(params):
+    """Validate only the current request's complete, shell-quoted stdin preview."""
+    if not isinstance(params, dict) or params.get('kind') != 'writeStdin':
+        return None
+    for name in ('threadId', 'turnId', 'itemId', 'approvalId', 'cwd', 'command'):
+        value = params.get(name)
+        if not isinstance(value, str) or not value or len(value) > MAX_APPROVAL_PATCH_CHARS:
+            return None
+    if params.get('networkApprovalContext') is not None:
+        return None
+    try:
+        parts = shlex.split(params['command'])
+    except ValueError:
+        return None
+    if (len(parts) != 4 or parts[:2] != ['write_stdin', '--session-id']
+            or not parts[2].isascii() or not parts[2].isdigit() or not parts[3]
+            or '\0' in parts[3]):
+        return None
+    try:
+        snapshot = json.dumps(params, ensure_ascii=True, sort_keys=True, separators=(',', ':'))
+    except (TypeError, ValueError):
+        return None
+    return snapshot if len(snapshot) <= MAX_APPROVAL_PATCH_CHARS else None
+
+
 PET_LANGUAGE_PREFERENCE = ('桌宠语言偏好：默认用简体中文回复；如果本轮用户要求其他语言或文字，请遵从。'
                            '保留代码、引用和专有名称的原文。')
 
@@ -224,6 +255,7 @@ class AppServer:
         self.file_change_patches = OrderedDict()
         self.command_items = OrderedDict()
         self.pending_command_snapshots = {}
+        self.pending_stdin_snapshots = {}
         self.pending_patch_snapshots = {}
         self.event_lock = threading.RLock()
         self.queued_server_requests = set()
@@ -237,7 +269,7 @@ class AppServer:
         self.mode = None
         threading.Thread(target=self._read, daemon=True).start()
         try:
-            self.request('initialize', {'clientInfo': {'name': 'codex_pet', 'title': 'Codex Pet', 'version': '2.24.0'}, 'capabilities': {'experimentalApi': True}})
+            self.request('initialize', {'clientInfo': {'name': 'codex_pet', 'title': 'Codex Pet', 'version': '2.25.0'}, 'capabilities': {'experimentalApi': True}})
             self.write({'method': 'initialized', 'params': {}})
         except Exception:
             self.close()
@@ -429,6 +461,17 @@ class AppServer:
         while len(patches) > MAX_APPROVAL_PATCH_ITEMS:
             patches.popitem(last=False)
 
+    def _stdin_protocol_verified(self):
+        """Identify the running process, not a potentially replaced executable path."""
+        if not hasattr(self, "_stdin_binary_verified"):
+            try:
+                with open(f"/proc/{self.process.pid}/exe", "rb") as executable:
+                    digest = hashlib.file_digest(executable, "sha256").hexdigest()
+                self._stdin_binary_verified = digest in VERIFIED_STDIN_BINARIES
+            except (OSError, AttributeError):
+                self._stdin_binary_verified = False
+        return self._stdin_binary_verified
+
     def handle(self, event):
         lock = getattr(self, 'event_lock', None)
         if lock is None:  # Isolated unit test instances do not start a server.
@@ -481,6 +524,13 @@ class AppServer:
                         if snapshots is None:
                             snapshots = self.pending_command_snapshots = {}
                         snapshots[request_id] = dict(item) if item else None
+                        if params.get('kind') == 'writeStdin':
+                            snapshots = getattr(self, 'pending_stdin_snapshots', None)
+                            if snapshots is None:
+                                snapshots = self.pending_stdin_snapshots = {}
+                            verified = self._stdin_protocol_verified()
+                            snapshots[request_id] = stdin_approval_details(params) if verified else None
+                            payload['stdin_protocol_verified'] = verified
                     if method == 'item/fileChange/requestApproval':
                         key = self._patch_key(params)
                         payload['file_changes'] = getattr(self, 'file_change_patches', {}).get(key)
@@ -598,6 +648,7 @@ class AppServer:
         self.pending_approvals.pop(request_id, None)
         getattr(self, 'pending_patch_snapshots', {}).pop(request_id, None)
         getattr(self, 'pending_command_snapshots', {}).pop(request_id, None)
+        getattr(self, 'pending_stdin_snapshots', {}).pop(request_id, None)
         data = {'id': request_id, 'threadId': thread_id}
         if getattr(self, 'server_id', None):
             data['serverId'] = self.server_id
@@ -638,10 +689,19 @@ class AppServer:
                     self.write({'id': request_id, 'result': {'decision': denial}})
                 del self.pending_approvals[request_id]
                 snapshots.pop(request_id, None)
+                getattr(self, 'pending_stdin_snapshots', {}).pop(request_id, None)
                 self.emit('error', '审批期间命令内容发生变化，已拒绝；请重新检查。')
                 return
             network = params.get('networkApprovalContext')
-            if params.get('kind', 'command') != 'command':
+            if params.get('kind') == 'writeStdin':
+                shown = getattr(self, 'pending_stdin_snapshots', {}).get(request_id)
+                current_preview = stdin_approval_details(params)
+                if shown and shown != current_preview:
+                    self._deny_changed_request(request_id, method, params)
+                    self._invalidate_approval(request_id, params.get('threadId'))
+                    return
+                reviewable = bool(shown and shown == current_preview)
+            elif params.get('kind', 'command') != 'command':
                 reviewable = False
             elif network is not None:
                 reviewable = (isinstance(network, dict) and isinstance(network.get('host'), str)
@@ -703,6 +763,7 @@ class AppServer:
         del self.pending_approvals[request_id]
         getattr(self, 'pending_patch_snapshots', {}).pop(request_id, None)
         getattr(self, 'pending_command_snapshots', {}).pop(request_id, None)
+        getattr(self, 'pending_stdin_snapshots', {}).pop(request_id, None)
 
     def close(self):
         if self.process.poll() is None:

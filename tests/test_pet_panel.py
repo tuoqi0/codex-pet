@@ -126,12 +126,48 @@ class PanelTests(unittest.TestCase):
                               'params': {'kind': 'writeStdin', 'command': 'harmless'},
                               'command_item': {'command': 'shell', 'cwd': '/tmp/project'}})
         self.assertNotIn('允许', observed[-1][1])
-        self.assertIn('终端输入审批暂不支持', observed[-1][0])
+        self.assertIn('审批详情不可用', observed[-1][0])
         QTimer.singleShot(0, inspect)
         self.panel._approval({'id': 15, 'method': 'item/commandExecution/requestApproval',
                               'params': {'approvalId': 'subcommand-id'},
                               'command_item': {'command': 'shell', 'cwd': '/tmp/project'}})
         self.assertNotIn('允许', observed[-1][1])
+
+    def test_stdin_approval_displays_request_and_escapes_controls(self):
+        from PyQt5.QtWidgets import QPlainTextEdit
+        observed = []
+        def inspect():
+            dialog = QApplication.activeModalWidget()
+            observed.append((dialog.findChild(QPlainTextEdit).toPlainText(),
+                             [button.text() for button in dialog.findChildren(QPushButton)]))
+            dialog.reject()
+        params = {'kind': 'writeStdin', 'threadId': 't', 'turnId': 'r', 'itemId': 'i',
+                  'approvalId': 'a', 'cwd': '/tmp', 'command': "write_stdin --session-id 12 '测试\u202e\x1b\u2028\u2029'",
+                  'availableDecisions': ['accept', 'cancel']}
+        QTimer.singleShot(0, inspect)
+        self.panel._approval({'id': 21, 'method': 'item/commandExecution/requestApproval', 'params': params,
+                              'command_item': {'command': 'old command', 'cwd': '/other'},
+                              'stdin_protocol_verified': True})
+        self.assertIn('允许', observed[-1][1])
+        self.assertIn('测试', observed[-1][0])
+        self.assertIn('\\u202e', observed[-1][0])
+        self.assertIn('\\u001b', observed[-1][0])
+        self.assertIn('\\u2028', observed[-1][0])
+        self.assertIn('\\u2029', observed[-1][0])
+        self.assertIn('old command', observed[-1][0])
+        self.assertIn('终端启动时的参考信息', observed[-1][0])
+        self.assertEqual(self.panel.backend.calls[-1], ('approve', 21, 'cancel'))
+        QTimer.singleShot(0, inspect)
+        self.panel._approval({'id': 23, 'method': 'item/commandExecution/requestApproval', 'params': params})
+        self.assertNotIn('允许', observed[-1][1])
+        self.assertIn('尚未验证', observed[-1][0])
+        self.assertIn('参考信息不可用', observed[-1][0])
+        for change in ({'approvalId': ''}, {'command': 'write_stdin --session-id 12 ' + 'x' * 256_001}):
+            QTimer.singleShot(0, inspect)
+            self.panel._approval({'id': 22, 'method': 'item/commandExecution/requestApproval',
+                                  'params': dict(params, **change)})
+            self.assertNotIn('允许', observed[-1][1])
+            self.assertIn('不可用或超过显示限制', observed[-1][0])
 
     def test_additional_permission_approval_does_not_offer_unimplemented_stop(self):
         observed = []
