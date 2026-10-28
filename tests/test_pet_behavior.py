@@ -29,6 +29,15 @@ class BehaviorTests(unittest.TestCase):
         self.assertEqual(self.pet.message, 'hello')
         self.assertEqual(self.pet.pose(6.9), 'idle')
 
+    def test_blink_does_not_replace_an_active_idle_action(self):
+        for pose in ('tea', 'wave', 'happy'):
+            with self.subTest(pose=pose):
+                self.pet.idle_pose = pose
+                self.pet.idle_pose_until = 5.0
+                self.pet.blink_until = 4.18
+                self.assertEqual(self.pet.pose(4.0), pose)
+                self.assertEqual(self.pet.pose(5.1), 'idle')
+
     def test_drink_reminder_uses_tea_pose_then_returns_to_idle(self):
         self.pet.react(4.0, '喝水', 'tea')
         self.assertEqual(self.pet.pose(4.5), 'tea')

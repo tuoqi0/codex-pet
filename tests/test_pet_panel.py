@@ -10,7 +10,8 @@ from pathlib import Path
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QTimer
+from PyQt5 import sip
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QLabel, QPushButton
 import pet_panel
@@ -132,6 +133,154 @@ class PanelTests(unittest.TestCase):
         self.assertEqual(self.panel.prompt.toPlainText(), '保留草稿')
         self.assertEqual(self.panel.permission.currentData(), permission)
         self.assertEqual(self.panel.model_choice.get('task'), selected_model)
+
+    def test_auto_follow_requires_visible_selected_idle_and_can_disable(self):
+        self.panel.mode.setCurrentIndex(2)
+        self.panel.cwd = '/tmp'
+        self.panel.backend.calls.clear()
+        self.panel._follow_thread_tick()
+        self.assertFalse(self.panel.backend.calls)
+        self.panel.selected_thread = 'chosen'
+        self.panel._follow_thread_tick()
+        self.assertFalse(self.panel.backend.calls)
+        self.panel.show()
+        self.app.processEvents()
+        self.panel.busy = True
+        self.panel._follow_thread_tick()
+        self.assertFalse(self.panel.backend.calls)
+        self.panel.busy = False
+        self.panel.thread_follow.setChecked(False)
+        self.panel._follow_thread_tick()
+        self.assertFalse(self.panel.backend.calls)
+        self.panel.thread_follow.setChecked(True)
+        self.panel._follow_thread_tick()
+        self.panel._follow_thread_tick()
+        self.assertEqual(self.panel.backend.calls, [('codex_thread', 'chosen')])
+        self.assertFalse(self.panel.send_button.isEnabled())
+        self.panel.prompt.setPlainText('保留草稿')
+        self.panel.thread_follow.setChecked(False)
+        self.panel.bridge.received.emit('codex_thread', {'thread': {'id': 'chosen', 'cwd': '/tmp',
+            'turns': [{'items': [{'type': 'agentMessage', 'text': '不應顯示'}]}]}})
+        self.assertNotIn('不應顯示', self.panel.transcripts['task'].toPlainText())
+        self.assertFalse(self.panel.thread_loading)
+        self.assertTrue(self.panel.send_button.isEnabled())
+        self.assertEqual(self.panel.prompt.toPlainText(), '保留草稿')
+
+    def test_auto_follow_discards_result_when_hidden_or_mode_switched(self):
+        self.panel.mode.setCurrentIndex(2)
+        self.panel.cwd = '/tmp'
+        self.panel.selected_thread = 'chosen'
+        self.panel.show()
+        self.app.processEvents()
+        self.panel._follow_thread_tick()
+        self.panel.hide()
+        self.panel.show()
+        self.panel.bridge.received.emit('codex_thread', {'thread': {'id': 'chosen', 'cwd': '/tmp',
+            'turns': [{'items': [{'type': 'agentMessage', 'text': '隱藏後過期'}]}]}})
+        self.assertNotIn('隱藏後過期', self.panel.transcripts['task'].toPlainText())
+        self.panel._follow_thread_tick()
+        self.panel.mode.setCurrentIndex(0)
+        self.panel.mode.setCurrentIndex(2)
+        self.panel.bridge.received.emit('codex_thread', {'thread': {'id': 'chosen', 'cwd': '/tmp',
+            'turns': [{'items': [{'type': 'agentMessage', 'text': '模式切換後過期'}]}]}})
+        self.assertNotIn('模式切換後過期', self.panel.transcripts['task'].toPlainText())
+        self.assertFalse(self.panel.thread_loading)
+
+    def test_auto_follow_errors_do_not_repeat_and_recovery_is_reported(self):
+        self.panel.mode.setCurrentIndex(2)
+        self.panel.cwd = '/tmp'
+        self.panel.selected_thread = 'chosen'
+        self.panel.show()
+        self.app.processEvents()
+        self.panel._follow_thread_tick()
+        self.panel.bridge.received.emit('codex_thread_error', '私有故障詳情')
+        self.assertIn('自動跟隨暫不可用', self.panel.status.text())
+        self.assertNotIn('私有故障詳情', self.panel.status.text())
+        self.panel.status.setText('其他操作狀態')
+        self.panel._follow_thread_tick()
+        self.panel.bridge.received.emit('codex_thread_error', '重複')
+        self.assertEqual(self.panel.status.text(), '其他操作狀態')
+        self.panel._follow_thread_tick()
+        self.panel.bridge.received.emit('codex_thread', {'thread': {'id': 'chosen', 'cwd': '/tmp', 'turns': []}})
+        self.assertIn('已恢復', self.panel.status.text())
+
+    def test_refresh_preserves_scrollback_and_draft(self):
+        self.panel.mode.setCurrentIndex(2)
+        self.panel.cwd = '/tmp'
+        self.panel.selected_thread = 'chosen'
+        self.panel.show()
+        self.panel.resize(550, 650)
+        transcript = self.panel.transcripts['task']
+        transcript.clear()
+        for i in range(30):
+            transcript.add_message('assistant', '消息 %d ' % i + '長文字' * 40)
+        QTest.qWait(100)
+        bar = transcript.verticalScrollBar()
+        self.assertGreater(bar.maximum(), 50)
+        bar.setValue(30)
+        self.panel.prompt.setPlainText('我的草稿')
+        self.panel._refresh_thread()
+        items = [{'type': 'agentMessage', 'text': '消息 %d ' % i + '長文字' * 40} for i in range(31)]
+        self.panel.bridge.received.emit('codex_thread', {'thread': {'id': 'chosen', 'cwd': '/tmp', 'turns': [{'items': items}]}})
+        QTest.qWait(100)
+        self.assertEqual(bar.value(), 30)
+        self.assertEqual(self.panel.prompt.toPlainText(), '我的草稿')
+        self.assertIn('消息 30', transcript.toPlainText())
+        bar.setValue(bar.maximum())
+        self.panel._refresh_thread()
+        items.append({'type': 'agentMessage', 'text': '最新消息' * 80})
+        self.panel.bridge.received.emit('codex_thread', {'thread': {'id': 'chosen', 'cwd': '/tmp', 'turns': [{'items': items}]}})
+        QTest.qWait(100)
+        self.assertEqual(bar.value(), bar.maximum())
+
+    def test_bridge_worker_can_finish_after_qt_receiver_destroyed(self):
+        bridge = pet_panel._EventBridge()
+        emit = bridge.safe_emit
+        sip.delete(bridge)
+        emit('codex_thread', {'synthetic': 'ignored'})
+
+    def test_scroll_restore_after_widget_destruction_is_ignored(self):
+        transcript = pet_panel.ChatTranscript()
+        transcript.replace_messages_preserving_scroll([('assistant', '合成內容')])
+        sip.delete(transcript)
+        self.app.processEvents()
+
+    def test_auto_follow_timer_observes_external_append_end_to_end(self):
+        class LiveBackend(FakeBackend):
+            def __init__(self, emit):
+                super().__init__(emit)
+                self.external = ['初始合成消息']
+            def codex_thread(self, thread_id):
+                self.calls.append(('codex_thread', thread_id))
+                snapshot = list(self.external)
+                QTimer.singleShot(8, lambda: self.emit('codex_thread', {'thread': {
+                    'id': thread_id, 'cwd': '/tmp', 'turns': [{'items': [
+                        {'type': 'agentMessage', 'text': text} for text in snapshot]}]}}))
+        panel = PetPanel(backend_factory=LiveBackend)
+        panel.model_cache = {mode: [{'id': 'model', 'name': 'Model'}] for mode in ('chat', 'plan', 'task')}
+        panel.mode.setCurrentIndex(2)
+        panel.cwd = '/tmp'
+        panel.selected_thread = 'selected-synthetic'
+        panel.prompt.setPlainText('未發送的草稿')
+        panel.images = ['/tmp/draft.png']
+        panel.thread_follow_timer.setInterval(30)
+        panel.show()
+        QTimer.singleShot(70, lambda: panel.backend.external.append('外部合成新消息'))
+        QTest.qWait(200)
+        self.assertIn('初始合成消息', panel.transcripts['task'].toPlainText())
+        self.assertIn('外部合成新消息', panel.transcripts['task'].toPlainText())
+        self.assertEqual(panel.prompt.toPlainText(), '未發送的草稿')
+        self.assertEqual(panel.images, ['/tmp/draft.png'])
+        self.assertGreaterEqual(len(panel.backend.calls), 2)
+        self.assertTrue(all(call == ('codex_thread', 'selected-synthetic') for call in panel.backend.calls))
+        panel.hide()
+        QTest.qWait(30)
+        count = len(panel.backend.calls)
+        QTest.qWait(90)
+        self.assertEqual(len(panel.backend.calls), count)
+        panel.thread_follow_timer.stop()
+        panel.deleteLater()
+        self.app.processEvents()
 
     def test_chat_progress_and_error_completion(self):
         self.panel.prompt.setPlainText('你好')

@@ -32,8 +32,13 @@ class SpritePlayer(QObject):
         self.source = None
         self.image = None
         self.current = None
+        # Temporary gestures and landing return to the current activity,
+        # which may change while the temporary animation is playing.
+        self.default_animation = 'idle'
         self.index = 0
         self.loop = False
+        self.paused = False
+        self.duration = 100
         self.timer = QTimer(self)
         self.timer.setSingleShot(True)
         self.timer.timeout.connect(self.advance)
@@ -82,29 +87,42 @@ class SpritePlayer(QObject):
         self.source, self.current, self.index = source, ident, 0
         self.loop = ident in ('idle', 'drag', 'work02')
         self.image = image
-        self.timer.start(duration)
+        self.duration = duration
+        if not self.paused:
+            self.timer.start(duration)
         self.frame_changed.emit()
         return True
 
     def advance(self):
-        if not self.source:
+        if not self.source or self.paused:
             return
         index = self.index + 1
         if index >= self.source.n_frames:
             if not self.loop:
-                self.play('idle')
+                self.play(self.default_animation)
                 return
             index = 0
         try:
             self.image, duration = self.frame(self.source, index)
             self.index = index
+            self.duration = duration
             self.timer.start(duration)
             self.frame_changed.emit()
         except (OSError, ValueError, EOFError, SyntaxError, Image.DecompressionBombError) as exc:
             self.timer.stop()
             self.error.emit(f'动画解码失败：{exc}')
 
+    def pause(self):
+        self.paused = True
+        self.timer.stop()
+
+    def resume(self):
+        self.paused = False
+        if self.source and not self.timer.isActive():
+            self.timer.start(self.duration)
+
     def close(self):
+        self.paused = True
         self.timer.stop()
         if self.source:
             self.source.close()

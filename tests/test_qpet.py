@@ -73,6 +73,38 @@ class QPetTests(unittest.TestCase):
         pet.close()
         self.assertIsNone(pet.player.source)
 
+    def test_one_shot_resumes_latest_activity(self):
+        player = SpritePlayer(self.root)
+        try:
+            player.default_animation = 'work02'
+            player.play('01')
+            player.advance()
+            player.advance()
+            self.assertEqual(player.current, 'work02')
+            player.play('landing')
+            player.default_animation = 'idle'  # task ends before landing finishes
+            player.advance()
+            player.advance()
+            self.assertEqual(player.current, 'idle')
+        finally:
+            player.close()
+
+    def test_paused_player_does_not_decode_more_frames_after_status_change(self):
+        player = SpritePlayer(self.root)
+        try:
+            player.pause()
+            with mock.patch.object(player, 'frame', wraps=player.frame) as decode:
+                player.play('work02')
+                self.assertEqual(decode.call_count, 1)  # establish the new first frame
+                QTest.qWait(180)
+                self.assertEqual(decode.call_count, 1)
+                self.assertFalse(player.timer.isActive())
+                player.resume()
+                QTest.qWait(180)
+                self.assertGreater(decode.call_count, 1)
+        finally:
+            player.close()
+
     def test_single_click_greets_after_double_click_interval(self):
         manager = mock.Mock()
         pet = QPet(manager, self.root)

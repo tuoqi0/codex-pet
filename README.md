@@ -12,7 +12,7 @@ they are not independently rigged. Patrol moves the figure as a whole.
 Build with `./build-deb.sh`. Install the resulting package with:
 
 ```sh
-sudo apt install ./dist/codex-pet_2.8.0_all.deb
+sudo apt install ./dist/codex-pet_2.9.0_all.deb
 ```
 
 Quit an already-running older version through its right-click menu before
@@ -49,6 +49,8 @@ unusable, the original dragon still runs, and the terminal shows a reason.
   Automatic proximity interaction is disabled on Wayland, where absolute
   window positions are not reliable. Quiet hours and snoozing suppress
   spontaneous messages; clicking a character can still prompt a reply.
+- Window size, visibility, patrol and X11 positions are saved locally after
+  explicit changes. Wayland determines placement and does not save coordinates.
 
 Companion settings offer optional rest, water, meal and greeting reminders,
 quiet hours and a one-hour snooze. Reminders use the pet's runtime and the
@@ -91,7 +93,9 @@ next turn before continuing. The app checks the returned sandbox and approval
 policy; it does not infer the old session's permissions. Avoid running two
 clients on the same session at once. ChatGPT authorization does not grant access
 to ChatGPT web conversation history, so ordinary chat cannot synchronize that
-history. Ordinary chat, plan and task retain separate contexts.
+history. Ordinary chat, plan and task retain separate contexts. Automatic follow
+checks only the selected Codex session about every 30 seconds while the panel is
+visible and idle; it can be turned off in the panel.
 
 Use **圖片** to attach up to four explicitly selected static PNG, JPEG, WebP
 or GIF files to a message. A single image is limited to 10 MiB and each request

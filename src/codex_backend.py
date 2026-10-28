@@ -115,7 +115,7 @@ def discover_codex(home=None):
 
 
 class AppServer:
-    def __init__(self, emit, token=None, executable=None, stop_event=None):
+    def __init__(self, emit, token=None, executable=None, stop_event=None, on_spawn=None):
         self.emit = emit
         self.stop_event = stop_event
         binary = executable or discover_codex()
@@ -157,7 +157,9 @@ class AppServer:
         self.mode = None
         threading.Thread(target=self._read, daemon=True).start()
         try:
-            self.request('initialize', {'clientInfo': {'name': 'codex_pet', 'title': 'Codex Pet', 'version': '2.8.0'}, 'capabilities': {'experimentalApi': True}})
+            if on_spawn is not None:
+                on_spawn(self.process)
+            self.request('initialize', {'clientInfo': {'name': 'codex_pet', 'title': 'Codex Pet', 'version': '2.9.0'}, 'capabilities': {'experimentalApi': True}})
             self.write({'method': 'initialized', 'params': {}})
         except Exception:
             self.close()
@@ -344,6 +346,7 @@ class Backend:
         self.response = None
         self.worker = None
         self.closing = False
+        self.history_processes = set()
         self.history = []
         self.history_image_bytes = 0
         self.threads = {}
@@ -489,8 +492,19 @@ class Backend:
         def run():
             if not thread_id:
                 raise RuntimeError('请选择 Codex 对话。')
-            server = AppServer(self.emit, executable=self.executable)
+            registered = []
+            def register(process):
+                with self.active_lock:
+                    if self.closing:
+                        raise RuntimeError('应用正在退出。')
+                    self.history_processes.add(process)
+                    registered.append(process)
+            server = None
             try:
+                with self.active_lock:
+                    if self.closing:
+                        raise RuntimeError('应用正在退出。')
+                server = AppServer(self.emit, executable=self.executable, on_spawn=register)
                 account = server.request('account/read', {'refreshToken': False}).get('account')
                 if not account or account.get('type') != 'chatgpt':
                     raise RuntimeError('Codex 未以 ChatGPT 账户登录；不会使用 API key。')
@@ -526,7 +540,13 @@ class Backend:
                     if len(seen) >= MAX_HISTORY_PAGES:
                         raise RuntimeError('此 Codex 对话过长，超过桌宠一次读取上限；原有显示和草稿未更改。')
             finally:
-                server.close()
+                try:
+                    if server is not None:
+                        server.close()
+                finally:
+                    with self.active_lock:
+                        for process in registered:
+                            self.history_processes.discard(process)
             self.emit('codex_thread', result)
         self._async(run, 'codex_thread_error')
 
@@ -821,6 +841,28 @@ class Backend:
     def close(self):
         with self.active_lock:
             self.closing = True
+            history_processes = list(self.history_processes)
+        # These are only short-lived servers created for explicit history reads.
+        # Terminate them together and cap the total UI-thread wait.
+        for process in history_processes:
+            if process.poll() is None:
+                try:
+                    process.terminate()
+                except ProcessLookupError:
+                    pass
+        deadline = time.monotonic() + .5
+        for process in history_processes:
+            if process.poll() is None:
+                try:
+                    process.wait(timeout=max(0, deadline - time.monotonic()))
+                except subprocess.TimeoutExpired:
+                    pass
+        for process in history_processes:
+            if process.poll() is None:
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
         self.cancel()
         with self.active_lock:
             worker = self.worker

@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 """Interactive, transparent dragon companion for Linux desktops."""
 import argparse
+from dataclasses import replace
 from datetime import datetime
 import math
 from pathlib import Path
@@ -20,6 +21,29 @@ def asset_path(name):
     directory = Path(__file__).resolve().parent
     installed = directory / name
     return installed if installed.is_file() else directory.parent / 'assets' / name
+
+
+
+def blink_overlay(base_path, blink_path):
+    """Replace the eyes on the same base illustration for a stable blink.
+
+    The supplied full blink image differs slightly in dimensions and resampling
+    from the idle image. Restricting it to the eye area avoids a full-body flash.
+    """
+    with Image.open(base_path) as source:
+        base = source.convert('RGBA')
+    with Image.open(blink_path) as source:
+        blink = source.convert('RGBA').resize(base.size, Image.Resampling.LANCZOS)
+    width, height = base.size
+    mask = Image.new('L', base.size, 0)
+    ImageDraw.Draw(mask).rectangle((round(width * .535), round(height * .150),
+                                    round(width * .615), round(height * .230)), fill=255)
+    mask = mask.filter(ImageFilter.GaussianBlur(max(1, round(width * .0024))))
+    result = Image.composite(blink, base, mask)
+    # The source blink asset differs by up to one alpha level in the eye area;
+    # preserve the original figure's coverage instead of introducing a fade.
+    result.putalpha(base.getchannel('A'))
+    return result
 
 
 def wave_alternate(base_path, alternate_path):
@@ -53,10 +77,12 @@ class CodexPet(QWidget):
         self.speech = SpeechBubble()
         self.scale_factor = 0.63
         self.frames = {}
-        for pose, filename in (('idle', 'dragon-seated.png'), ('blink', 'dragon-seated-blink.png'),
+        for pose, filename in (('idle', 'dragon-seated.png'),
                                ('wave', 'dragon-seated-wave.png'), ('tea', 'dragon-seated-tea.png'),
                                ('happy', 'dragon-seated-happy.png'), ('work', 'dragon-seated-work.png')):
             self.frames[pose] = motion_frames(asset_path(filename))
+        self.frames['blink'] = motion_frames(blink_overlay(
+            asset_path('dragon-seated.png'), asset_path('dragon-seated-blink.png')))
         self.frames['wave2'] = motion_frames(wave_alternate(
             asset_path('dragon-seated-wave.png'), asset_path('dragon-seated-wave2.png')))
         self.setWindowTitle('Codex Pet')
@@ -123,6 +149,8 @@ class CodexPet(QWidget):
         if event.button() == Qt.LeftButton and self.press_global is not None:
             if self.drag_moved:
                 self.behavior.end_drag(time.monotonic())
+                if self.manager:
+                    self.manager.window_moved(self)
             else:
                 self.click_timer.start(QApplication.doubleClickInterval())
             self.press_global = None
@@ -147,7 +175,10 @@ class CodexPet(QWidget):
         patrol.setCheckable(True)
         patrol.setChecked(self.behavior.patrol)
         patrol.setEnabled(not self.wayland)
-        patrol.toggled.connect(lambda enabled: self.behavior.set_patrol(enabled, time.monotonic()))
+        if self.manager:
+            patrol.toggled.connect(self.manager.set_patrol)
+        else:
+            patrol.toggled.connect(lambda enabled: self.behavior.set_patrol(enabled, time.monotonic()))
         if self.wayland:
             menu.addAction('Wayland 不支援自動定位').setEnabled(False)
         if self.manager:
@@ -242,6 +273,7 @@ class QPet(QWidget):
         self.message = ''
         self.message_until = 0.0
         self.player = SpritePlayer(root, self)
+        self.player.pause()  # The top-level widget starts hidden.
         self.player.frame_changed.connect(self.update)
         self.set_scale(1.0)
         area = QApplication.primaryScreen().availableGeometry()
@@ -285,6 +317,14 @@ class QPet(QWidget):
         if self.manager:
             self.manager.on_user_greet(self)
 
+    def _sync_activity_loop(self):
+        # A task may start or finish while the mouse is held. Temporary
+        # animations already return to the latest default when they finish;
+        # looping idle/work animations need an explicit update on release.
+        if (self.player.current in ('idle', 'work02')
+                and self.player.current != self.player.default_animation):
+            self.player.play(self.player.default_animation)
+
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
             self.press_global = event.globalPos()
@@ -309,7 +349,10 @@ class QPet(QWidget):
         if event.button() == Qt.LeftButton and self.press_global is not None:
             if self.drag_moved:
                 self.player.play('landing')
+                if self.manager:
+                    self.manager.window_moved(self)
             else:
+                self._sync_activity_loop()
                 self.click_timer.start(QApplication.doubleClickInterval())
             self.press_global = self.drag_offset = None
             event.accept()
@@ -318,6 +361,7 @@ class QPet(QWidget):
         if event.button() == Qt.LeftButton:
             self.click_timer.stop()
             self.press_global = self.drag_offset = None
+            self._sync_activity_loop()
             self.manager.open_floating(self)
             event.accept()
 
@@ -330,13 +374,12 @@ class QPet(QWidget):
         menu.exec_(event.globalPos())
 
     def hideEvent(self, event):
-        self.player.timer.stop()
+        self.player.pause()
         self.speech.hide()
         super().hideEvent(event)
 
     def showEvent(self, event):
-        if self.player.source and not self.player.timer.isActive():
-            self.player.timer.start(20)
+        self.player.resume()
         super().showEvent(event)
 
     def closeEvent(self, event):
@@ -349,6 +392,20 @@ class _WeatherBridge(QObject):
     received = pyqtSignal(int, str, object)
 
 
+class _ScreenBridge(QObject):
+    def __init__(self, manager, parent):
+        super().__init__(parent)
+        self.manager = manager
+
+    def changed(self, *_args):
+        # Qt may update the screen list after delivering screenRemoved.
+        QTimer.singleShot(0, self.manager._clamp_windows)
+
+    def added(self, screen):
+        screen.availableGeometryChanged.connect(self.changed)
+        self.changed()
+
+
 class PetManager:
     """Keep the characters independent while sharing one conversation panel."""
     def __init__(self):
@@ -356,9 +413,12 @@ class PetManager:
         from q_idle import QIdleDirector
         from weather import WeatherClient
         from import_bailong import default_destination
+        from window_preferences import WindowPreferencesStore
         self.panel = None
         self.floating = None
         self.store = CompanionSettingsStore()
+        self.window_store = WindowPreferencesStore()
+        self.window_preferences, self.window_warning = self.window_store.load()
         self.settings_error = None
         try:
             settings = self.store.load()
@@ -375,6 +435,9 @@ class PetManager:
         self.weather_text = '天气：未设置城市' if not settings.weather_enabled else '天气：等待查询'
         self.weather_detail = ''
         self.dragon = CodexPet(self)
+        self.dragon.set_scale(self.window_preferences.dragon.scale)
+        self.dragon.behavior.set_patrol(self.window_preferences.dragon_patrol and not self.dragon.wayland, now)
+        self._restore_window(self.dragon, self.window_preferences.dragon)
         self.weather_bridge = _WeatherBridge(self.dragon)
         self.weather_bridge.received.connect(self._weather_result)
         self.qpet = None
@@ -382,6 +445,7 @@ class PetManager:
         if root.exists():
             try:
                 self.qpet = QPet(self, root)
+                self.qpet.set_scale(self.window_preferences.qpet.scale)
                 if not self.qpet.wayland:
                     screen = QApplication.screenAt(self.dragon.frameGeometry().center()) or QApplication.primaryScreen()
                     area = screen.availableGeometry()
@@ -389,13 +453,23 @@ class PetManager:
                     y = max(area.top(), min(self.dragon.y() + self.dragon.height() - self.qpet.height(),
                                             area.bottom() - self.qpet.height() + 1))
                     self.qpet.move(x, y)
+                    self._restore_window(self.qpet, self.window_preferences.qpet)
             except (OSError, ValueError, ImportError) as exc:
                 print(f'白龍素材無法使用：{exc}', file=sys.stderr)
         else:
             print(f'白龍素材尚未導入：codex-pet-import /home/tq/codex-pet.tar.xz（目錄：{root}）', file=sys.stderr)
-        self.dragon.show()
-        if self.qpet:
+        from window_preferences import ensure_visible
+        available = {'dragon', 'qpet'} if self.qpet else {'dragon'}
+        visible_preferences = ensure_visible(self.window_preferences, available)
+        self._clamp_windows()
+        if visible_preferences.dragon.visible:
+            self.dragon.show()
+        if self.qpet and visible_preferences.qpet.visible:
             self.qpet.show()
+        if self.window_warning:
+            anchor = self.dragon if self.dragon.isVisible() else self.qpet
+            anchor.speech.show_message(self.window_warning, anchor)
+        self._watch_screens()
         self.next_interaction = time.monotonic() + 12.0
         self.interaction_timer = QTimer(self.dragon)
         self.interaction_timer.timeout.connect(self.maybe_interact)
@@ -403,6 +477,95 @@ class PetManager:
         self.companion_timer = QTimer(self.dragon)
         self.companion_timer.timeout.connect(self.companion_tick)
         self.companion_timer.start(1000)
+
+    @staticmethod
+    def _areas():
+        return [screen.availableGeometry().getRect() for screen in QApplication.screens()]
+
+    def _restore_window(self, pet, preference):
+        from window_preferences import restored_position
+        position = restored_position(preference, (pet.width(), pet.height()), self._areas(),
+                                     QApplication.platformName())
+        if position is not None:
+            pet.move(*position)
+
+    def _clamp_pet(self, pet):
+        if pet.wayland:
+            return
+        from window_preferences import PetWindowPreference
+        current = PetWindowPreference(pet.x(), pet.y(), 1.0)
+        self._restore_window(pet, current)
+        screen = QApplication.screenAt(pet.frameGeometry().center()) or QApplication.primaryScreen()
+        if screen:
+            area = screen.availableGeometry()
+            base_width, base_height = ((pet.WIDTH, pet.HEIGHT) if pet is self.dragon else (180, 180))
+            preferred = (self.window_preferences.dragon.scale if pet is self.dragon
+                         else self.window_preferences.qpet.scale)
+            factor = min(preferred, area.width() / base_width, area.height() / base_height)
+            if pet.scale_factor != factor:
+                pet.set_scale(factor)
+            current = PetWindowPreference(pet.x(), pet.y(), 1.0)
+            self._restore_window(pet, current)
+
+    def _clamp_windows(self):
+        self._clamp_pet(self.dragon)
+        if self.qpet:
+            self._clamp_pet(self.qpet)
+
+    def _watch_screens(self):
+        self.screen_bridge = _ScreenBridge(self, self.dragon)
+        for screen in QApplication.screens():
+            screen.availableGeometryChanged.connect(self.screen_bridge.changed)
+        app = QApplication.instance()
+        app.screenAdded.connect(self.screen_bridge.added)
+        app.screenRemoved.connect(self.screen_bridge.changed)
+
+    def _save_windows(self):
+        try:
+            previous_backup = self.window_store.backup_path
+            self.window_store.save(self.window_preferences)
+            self.window_warning = None
+            if self.window_store.backup_path != previous_backup:
+                anchor = self.dragon if self.dragon.isVisible() else self.qpet
+                if anchor and anchor.isVisible():
+                    anchor.speech.show_message('原有损坏设置已备份：' + str(self.window_store.backup_path), anchor)
+        except (OSError, ValueError) as exc:
+            anchor = self.dragon if self.dragon.isVisible() else self.qpet
+            if anchor and anchor.isVisible():
+                anchor.speech.show_message('无法保存角色窗口设置：' + str(exc), anchor)
+
+    def window_moved(self, pet):
+        from window_preferences import remember_position
+        if pet.wayland:
+            return
+        self._clamp_pet(pet)
+        name = 'dragon' if pet is self.dragon else 'qpet'
+        preference = remember_position(getattr(self.window_preferences, name), pet.x(), pet.y(),
+                                       QApplication.platformName())
+        self.window_preferences = replace(self.window_preferences, **{name: preference})
+        self._save_windows()
+
+    def set_pet_scale(self, pet, factor):
+        name = 'dragon' if pet is self.dragon else 'qpet'
+        preference = replace(getattr(self.window_preferences, name), scale=factor)
+        preference.validate()
+        self.window_preferences = replace(self.window_preferences, **{name: preference})
+        pet.set_scale(factor)
+        self._clamp_pet(pet)
+        self._save_windows()
+
+    def set_pet_visible(self, pet, visible):
+        from window_preferences import set_visible
+        name = 'dragon' if pet is self.dragon else 'qpet'
+        available = {'dragon', 'qpet'} if self.qpet else {'dragon'}
+        self.window_preferences = set_visible(self.window_preferences, name, visible, available)
+        pet.show() if visible else pet.hide()
+        self._save_windows()
+
+    def set_patrol(self, enabled):
+        self.dragon.behavior.set_patrol(enabled, time.monotonic())
+        self.window_preferences = replace(self.window_preferences, dragon_patrol=enabled)
+        self._save_windows()
 
     def _available(self):
         now = time.monotonic()
@@ -645,12 +808,12 @@ class PetManager:
         for label, value in (('小', 0.75), ('標準', 1.0), ('大', 1.25)):
             # Dragon uses a different base size than Q.
             factor = value * (0.63 if current is self.dragon else 1.0)
-            sizes.addAction(label, lambda checked=False, n=factor: current.set_scale(n))
+            sizes.addAction(label, lambda checked=False, n=factor: self.set_pet_scale(current, n))
         if self.qpet:
             other = self.qpet if current is self.dragon else self.dragon
             action = menu.addAction('隱藏另一個角色' if other.isVisible() else '顯示另一個角色')
-            action.triggered.connect(other.hide if other.isVisible() else other.show)
-            menu.addAction('隱藏這個角色', current.hide).setEnabled(other.isVisible())
+            action.triggered.connect(lambda: self.set_pet_visible(other, not other.isVisible()))
+            menu.addAction('隱藏這個角色', lambda: self.set_pet_visible(current, False)).setEnabled(other.isVisible())
         else:
             menu.addAction('白龍素材尚未導入（見終端提示）').setEnabled(False)
         if current.wayland:
@@ -665,7 +828,12 @@ class PetManager:
         self.dragon.update()
         if self.qpet:
             ident = {'work': 'work02', 'celebrate': '18', 'quota': 'quota'}.get(action, 'idle')
-            self.qpet.player.play(ident)
+            player = self.qpet.player
+            player.default_animation = 'work02' if action == 'work' and 'work02' in player.entries else 'idle'
+            # A status update can arrive during a mouse gesture. Let the
+            # drag and landing finish, then resume the latest activity.
+            if self.qpet.press_global is None and player.current != 'landing':
+                player.play(ident)
 
     def open_panel(self, page='chat'):
         panel = self._ensure_panel()

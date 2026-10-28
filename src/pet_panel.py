@@ -4,10 +4,11 @@ import math
 from datetime import datetime
 from pathlib import Path
 
+from PyQt5 import sip
 from PyQt5.QtCore import QObject, Qt, QTimer, QUrl, pyqtSignal
 from PyQt5.QtGui import QColor, QDesktopServices, QPainter, QPen, QPixmap, QTextCursor, QTextOption
 from PyQt5.QtWidgets import (
-    QApplication, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QInputDialog,
+    QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QInputDialog,
     QFrame, QLabel, QLineEdit, QListWidget, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QStackedWidget, QTabWidget, QTextEdit,
     QVBoxLayout, QWidget,
 )
@@ -125,6 +126,7 @@ class ChatTranscript(QScrollArea):
         self.bubbles = []
         self.response = None
         self.follow_latest = True
+        self.scroll_restore_generation = 0
         self.verticalScrollBar().rangeChanged.connect(self._range_changed)
         self.verticalScrollBar().valueChanged.connect(self._position_changed)
         self.add_message('assistant', '你好呀，我在這裡。想聊聊天，或一起處理什麼事情？')
@@ -174,7 +176,33 @@ class ChatTranscript(QScrollArea):
     def toPlainText(self):
         return '\n'.join(bubble.toPlainText() for bubble in self.bubbles)
 
+    def replace_messages_preserving_scroll(self, messages):
+        current = [('user' if bubble.objectName() == 'userBubble' else 'assistant', bubble.toPlainText())
+                   for bubble in self.bubbles]
+        if current == messages:
+            return
+        bar = self.verticalScrollBar()
+        old_value = bar.value()
+        follow = old_value >= bar.maximum() - 8
+        self.clear()
+        generation = self.scroll_restore_generation
+        self.follow_latest = False
+        for role, text in messages:
+            self.add_message(role, text)
+            self.follow_latest = False
+        self.messages.activate()
+        def restore():
+            if sip.isdeleted(self) or sip.isdeleted(bar):
+                return
+            if generation != self.scroll_restore_generation:
+                return
+            self.follow_latest = follow
+            bar.setValue(bar.maximum() if follow else min(old_value, bar.maximum()))
+            self.follow_latest = follow
+        QTimer.singleShot(0, restore)
+
     def clear(self):
+        self.scroll_restore_generation += 1
         while self.messages.count() > 1:
             row = self.messages.takeAt(0).layout()
             if row:
@@ -190,6 +218,16 @@ class ChatTranscript(QScrollArea):
 
 class _EventBridge(QObject):
     received = pyqtSignal(str, object)
+
+    def safe_emit(self, event, data):
+        # Polling workers may finish after Qt has destroyed their receiver.
+        if sip.isdeleted(self):
+            return
+        try:
+            self.received.emit(event, data)
+        except RuntimeError:
+            if not sip.isdeleted(self):
+                raise
 
 
 class PetPanel(QDialog):
@@ -222,6 +260,10 @@ class PetPanel(QDialog):
         self.thread_cursor = None
         self.thread_reading = None
         self.thread_refreshing = False
+        self.thread_refresh_auto = False
+        self.thread_follow_generation = 0
+        self.thread_follow_request_generation = None
+        self.thread_follow_failed = False
         self.images = []
         self.images_after_login_need_review = False
         self.inflight_draft = None
@@ -231,7 +273,7 @@ class PetPanel(QDialog):
         self.progress_mode = None
         self.bridge = _EventBridge(self)
         self.bridge.received.connect(self._event)
-        self.backend = backend_factory(self.bridge.received.emit)
+        self.backend = backend_factory(self.bridge.safe_emit)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 14, 18, 10)
         layout.setSpacing(10)
@@ -247,6 +289,10 @@ class PetPanel(QDialog):
         self.status.setObjectName('status')
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
+        self.thread_follow_timer = QTimer(self)
+        self.thread_follow_timer.setInterval(30000)
+        self.thread_follow_timer.timeout.connect(self._follow_thread_tick)
+        self.thread_follow_timer.start()
         app = QApplication.instance()
         if app:
             app.aboutToQuit.connect(self.backend.close)
@@ -346,6 +392,11 @@ class PetPanel(QDialog):
         self.thread_refresh.clicked.connect(self._refresh_thread)
         model_options.addWidget(self.thread_refresh)
         card_layout.addLayout(model_options)
+        self.thread_follow = QCheckBox('自動跟隨已選對話（約 30 秒，非即時）')
+        self.thread_follow.setChecked(True)
+        self.thread_follow.setToolTip('只在此面板顯示且任務模式空閒時讀取已選對話，可隨時關閉。')
+        self.thread_follow.toggled.connect(self._follow_toggled)
+        card_layout.addWidget(self.thread_follow)
         self.notice = QLabel()
         self.notice.setObjectName('notice')
         self.notice.setWordWrap(True)
@@ -571,6 +622,8 @@ class PetPanel(QDialog):
 
     def _mode_changed(self):
         mode = self.mode.currentData()
+        if mode != 'task' and hasattr(self, 'thread_follow_generation'):
+            self.thread_follow_generation += 1
         if self.busy and mode != self.active_mode:
             self.mode.blockSignals(True)
             self.mode.setCurrentIndex(self.mode.findData(self.active_mode))
@@ -674,6 +727,7 @@ class PetPanel(QDialog):
         self.permission_notice.setVisible(visible)
         self.thread_refresh.setVisible(visible)
         self.thread_refresh.setEnabled(visible and not self.busy and not self.thread_loading)
+        self.thread_follow.setVisible(visible)
 
     def _new_conversation(self):
         if self.busy or self.thread_loading:
@@ -859,21 +913,70 @@ class PetPanel(QDialog):
         self.thread_open.setEnabled(True)
         self.thread_status.setText('請選擇對話後點擊讀取。' if self.thread_list.count() else '沒有找到 Codex 對話。')
 
+    def _follow_toggled(self, checked):
+        self.thread_follow_generation += 1
+        self.thread_follow_failed = False
+
+    def hideEvent(self, event):
+        self.thread_follow_generation += 1
+        super().hideEvent(event)
+
+    def _follow_thread_tick(self):
+        if not self.isVisible() or not self.thread_follow.isChecked():
+            return
+        self._start_thread_refresh(automatic=True)
+
     def _refresh_thread(self):
+        self._start_thread_refresh(automatic=False)
+
+    def _start_thread_refresh(self, automatic):
         if (self.busy or self.thread_loading or self.thread_dialog is not None or
                 not self.selected_thread or self.mode.currentData() != 'task'):
             return
         self.thread_reading = self.selected_thread
         self.thread_loading = True
         self.thread_refreshing = True
+        self.thread_refresh_auto = automatic
+        self.thread_follow_request_generation = self.thread_follow_generation if automatic else None
         self._show_permission()
-        self.status.setText('正在刷新已選對話…')
+        self.send_button.setEnabled(False)
+        self.send_button.setToolTip('正在讀取已選對話，完成後可發送。')
+        self.new_button.setEnabled(False)
+        self.threads_button.setEnabled(False)
+        self.choose_cwd.setEnabled(False)
+        if not automatic:
+            self.status.setText('正在刷新已選對話…')
         self.backend.codex_thread(self.thread_reading)
+
+    def _follow_result_is_stale(self):
+        return (self.thread_refresh_auto and
+                (not self.isVisible() or not self.thread_follow.isChecked() or
+                 self.mode.currentData() != 'task' or
+                 self.thread_follow_request_generation != self.thread_follow_generation or
+                 self.selected_thread != self.thread_reading))
+
+    def _finish_thread_refresh(self):
+        self.thread_loading = False
+        self.thread_reading = None
+        self.thread_refreshing = False
+        self.thread_refresh_auto = False
+        self.thread_follow_request_generation = None
+        self._show_permission()
+        if not self.busy:
+            self.send_button.setEnabled(True)
+            self.new_button.setEnabled(True)
+            self.threads_button.setEnabled(True)
+            self.choose_cwd.setEnabled(True)
+        self.send_button.setToolTip('')
 
     def _show_thread(self, result):
         if not self.thread_loading or not self.thread_reading:
             return
         refreshing = self.thread_refreshing
+        automatic = self.thread_refresh_auto
+        if refreshing and self._follow_result_is_stale():
+            self._finish_thread_refresh()
+            return
         if self.thread_dialog is None and not refreshing:
             self.thread_loading = False
             self.thread_reading = None
@@ -900,13 +1003,15 @@ class PetPanel(QDialog):
                 if invalid:
                     break
         if invalid:
-            self.thread_loading = False
-            self.thread_reading = None
-            self.thread_refreshing = False
             if refreshing:
-                self.status.setText('無法確認已選對話或工作目錄，刷新失敗。')
-                self._show_permission()
+                self._finish_thread_refresh()
+                if not automatic or not self.thread_follow_failed:
+                    self.status.setText('無法確認已選對話或工作目錄，刷新失敗。')
+                if automatic:
+                    self.thread_follow_failed = True
             else:
+                self.thread_loading = False
+                self.thread_reading = None
                 self.thread_open.setEnabled(True)
                 self.thread_status.setText('無法確認對話或工作目錄，請重試。')
             return
@@ -954,16 +1059,18 @@ class PetPanel(QDialog):
             self.backend.new_thread('plan', thread['cwd'])
             self.transcripts['plan'].clear()
         transcript = self.transcripts['task']
+        if refreshing:
+            transcript.replace_messages_preserving_scroll(messages)
+            self._finish_thread_refresh()
+            if not automatic:
+                self.status.setText('已刷新所選 Codex 對話；草稿和本次權限保持不變。')
+            elif self.thread_follow_failed:
+                self.thread_follow_failed = False
+                self.status.setText('已恢復跟隨所選 Codex 對話。')
+            return
         transcript.clear()
         for role, text in messages:
             transcript.add_message(role, text)
-        if refreshing:
-            self.thread_loading = False
-            self.thread_reading = None
-            self.thread_refreshing = False
-            self._show_permission()
-            self.status.setText('已刷新所選 Codex 對話；草稿和本次權限保持不變。')
-            return
         self.cwd = thread['cwd']
         self.project_label.setText(self.cwd)
         self.selected_thread = thread['id']
@@ -1124,10 +1231,16 @@ class PetPanel(QDialog):
         elif event == 'codex_thread':
             self._show_thread(data)
         elif event in ('codex_threads_error', 'codex_thread_error'):
-            self.thread_loading = False
-            self.thread_reading = None
-            self.thread_refreshing = False
-            self._show_permission()
+            automatic = self.thread_refresh_auto
+            stale = self._follow_result_is_stale()
+            self._finish_thread_refresh()
+            if stale:
+                return
+            if automatic:
+                if not self.thread_follow_failed:
+                    self.status.setText('自動跟隨暫不可用；可手動刷新。')
+                self.thread_follow_failed = True
+                return
             if self.thread_dialog is not None:
                 self.thread_status.setText('對話查詢失敗：' + str(data))
                 self.thread_more.setText('重試')

@@ -130,6 +130,98 @@ for line in sys.stdin:
         events = self._stop_protocol('close')
         self.assertEqual(events[-1], ('done', {'mode': 'task', 'status': 'unknown'}))
 
+    def test_quit_reaps_delayed_history_server_and_not_unrelated_process(self):
+        import os
+        import subprocess
+        program = """#!/usr/bin/python3
+import json, signal, sys, time
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+for line in sys.stdin:
+    request = json.loads(line)
+    method = request.get('method')
+    if method == 'initialize':
+        result = {}
+    elif method == 'account/read':
+        result = {'account': {'type': 'chatgpt'}}
+    elif method == 'thread/read':
+        open(MARKER, 'w').write('reading')
+        time.sleep(30)
+        result = {'thread': {'id': 'synthetic', 'cwd': '/tmp'}}
+    else:
+        continue
+    print(json.dumps({'id': request['id'], 'result': result}), flush=True)
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / 'synthetic-server'
+            marker = Path(directory) / 'reading'
+            executable.write_text(program.replace('MARKER', repr(str(marker))))
+            executable.chmod(0o700)
+            finished = threading.Event()
+            events = []
+            def emit(event, data):
+                events.append(event)
+                if event in ('codex_thread', 'codex_thread_error'): finished.set()
+            unrelated = subprocess.Popen(['/bin/sleep', '10'])
+            b = backend.Backend(emit, auth=FakeAuth(), executable=str(executable))
+            try:
+                with mock.patch.dict(os.environ, {'CODEX_HOME': directory}):
+                    b.codex_thread('synthetic')
+                    deadline = time.monotonic() + 5
+                    while not marker.exists() and time.monotonic() < deadline:
+                        time.sleep(.01)
+                    self.assertTrue(marker.exists(), 'synthetic server did not enter read')
+                    with b.active_lock:
+                        processes = list(b.history_processes)
+                    self.assertEqual(len(processes), 1)
+                    started = time.monotonic()
+                    b.close()
+                    self.assertLess(time.monotonic() - started, 1.5)
+                    self.assertTrue(finished.wait(3), events)
+                    self.assertIsNotNone(processes[0].poll())
+                    self.assertIsNone(unrelated.poll())
+                    with b.active_lock:
+                        self.assertFalse(b.history_processes)
+            finally:
+                b.close()
+                unrelated.terminate()
+                unrelated.wait(timeout=2)
+
+    def test_quit_reaps_history_server_stuck_in_initialize(self):
+        import os
+        program = """#!/usr/bin/python3
+import signal, sys, time
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+for line in sys.stdin:
+    open(MARKER, 'w').write('initializing')
+    time.sleep(30)
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / 'synthetic-server'
+            marker = Path(directory) / 'initializing'
+            executable.write_text(program.replace('MARKER', repr(str(marker))))
+            executable.chmod(0o700)
+            finished = threading.Event()
+            b = backend.Backend(lambda event, data: finished.set(), auth=FakeAuth(), executable=str(executable))
+            try:
+                with mock.patch.dict(os.environ, {'CODEX_HOME': directory}):
+                    b.codex_thread('synthetic')
+                    deadline = time.monotonic() + 5
+                    while not marker.exists() and time.monotonic() < deadline:
+                        time.sleep(.01)
+                    self.assertTrue(marker.exists())
+                    with b.active_lock:
+                        processes = list(b.history_processes)
+                    self.assertEqual(len(processes), 1)
+                    started = time.monotonic()
+                    b.close()
+                    self.assertLess(time.monotonic() - started, 1.5)
+                    self.assertTrue(finished.wait(3))
+                    self.assertIsNotNone(processes[0].poll())
+                    with b.active_lock:
+                        self.assertFalse(b.history_processes)
+            finally:
+                b.close()
+
     def test_quit_rejects_new_work(self):
         events = []
         b = backend.Backend(lambda *event: events.append(event), auth=FakeAuth())

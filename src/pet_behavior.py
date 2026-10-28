@@ -97,10 +97,10 @@ class PetBehavior:
             return 'wave' if int(elapsed / self.WAVE_FRAME_SECONDS) % 2 == 0 else 'wave2'
         if self.activity == 'work':
             return 'work'
-        if now < self.idle_pose_until and self.idle_pose == 'happy':
-            return 'happy'
-        if now < self.blink_until:
-            return 'blink'
+        # A blink is based on the idle illustration. Never replace an active
+        # tea or wave pose with it, which would make the held prop disappear.
         if now < self.idle_pose_until:
             return self.idle_pose
+        if now < self.blink_until:
+            return 'blink'
         return 'idle'

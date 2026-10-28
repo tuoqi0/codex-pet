@@ -8,24 +8,25 @@ from pathlib import Path
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 
-from PIL import Image
+from PIL import Image, ImageChops
 from PyQt5.QtCore import QRectF, Qt
 from PyQt5.QtGui import QImage, QPainter, qAlpha
 from PyQt5.QtWidgets import QApplication
 
 import dragon_motion
+from codex_pet import blink_overlay
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def default_render(frame):
+def render(frame, scale=.63):
     """Use the same target dimensions and scaling as CodexPet.paintEvent."""
-    image = QImage(302, 189, QImage.Format_RGBA8888)
+    image = QImage(round(480 * scale), round(300 * scale), QImage.Format_RGBA8888)
     image.fill(Qt.transparent)
     painter = QPainter(image)
     painter.setRenderHint(QPainter.SmoothPixmapTransform)
-    painter.scale(.63, .63)
+    painter.scale(scale, scale)
     bounds = frame.size().scaled(470, 266, Qt.KeepAspectRatio)
     painter.drawPixmap(QRectF((480 - bounds.width()) / 2, (300 - bounds.height()) / 2,
                              bounds.width(), bounds.height()), frame, QRectF(frame.rect()))
@@ -50,7 +51,29 @@ class DragonMotionTests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
         cls.frames = dragon_motion.motion_frames(ROOT / 'assets/dragon-seated.png')
-        cls.renders = [default_render(frame) for frame in cls.frames]
+        cls.renders = [render(frame) for frame in cls.frames]
+
+    def test_local_blink_keeps_other_pixels_at_three_sizes_and_every_phase(self):
+        blinking = dragon_motion.motion_frames(blink_overlay(
+            ROOT / 'assets/dragon-seated.png', ROOT / 'assets/dragon-seated-blink.png'))
+        self.assertEqual(len(blinking), len(self.frames))
+        for factor in (.63 * .75, .63, .63 * 1.25):
+            relative = factor / .63
+            left = math.floor(157 * relative) - 2
+            top = math.floor(38 * relative) - 2
+            right = math.ceil(186 * relative) + 2
+            bottom = math.ceil(57 * relative) + 2
+            for index, (idle, blink) in enumerate(zip(self.frames, blinking)):
+                with self.subTest(scale=factor, frame=index):
+                    before, after = render(idle, factor), render(blink, factor)
+                    difference = ImageChops.difference(before, after)
+                    changed = difference.convert('RGB').getbbox()
+                    self.assertIsNotNone(changed, 'blink must visibly change the eyes')
+                    self.assertGreaterEqual(changed[0], left)
+                    self.assertGreaterEqual(changed[1], top)
+                    self.assertLessEqual(changed[2], right)
+                    self.assertLessEqual(changed[3], bottom)
+                    self.assertIsNone(difference.getchannel('A').getbbox(), 'blink must not fade the figure')
 
     def test_pose_and_pil_inputs_use_identical_canvas(self):
         self.assertEqual(len(self.frames), 12)
