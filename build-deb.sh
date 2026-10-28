@@ -12,18 +12,19 @@ mkdir -p "$stage/DEBIAN" "$stage/usr/bin" "$stage/usr/share/codex-pet" \
     "$stage/usr/share/applications" "$stage/usr/share/pixmaps"
 cat > "$stage/DEBIAN/control" <<'EOF'
 Package: codex-pet
-Version: 1.2.0
+Version: 2.2.0
 Section: utils
 Priority: optional
 Architecture: all
 Maintainer: Codex Pet <noreply@example.invalid>
-Depends: python3, python3-pyqt5
+Depends: python3, python3-pyqt5, python3-pil, python3-requests, python3-jwt, python3-cryptography
 Description: Interactive dragon desktop companion
  A dragon companion with greeting poses, blinking, desktop patrol,
  and a draggable transparent window.
 EOF
-install -m 755 "$base/src/codex_pet.py" "$stage/usr/share/codex-pet/codex_pet.py"
-install -m 644 "$base/src/pet_behavior.py" "$stage/usr/share/codex-pet/pet_behavior.py"
+for source in "$base"/src/*.py; do
+    install -m 644 "$source" "$stage/usr/share/codex-pet/"
+done
 for asset in dragon-lady.png blink.png wave.png wave2.png; do
     install -m 644 "$base/assets/$asset" "$stage/usr/share/codex-pet/$asset"
 done
@@ -33,5 +34,10 @@ cat > "$stage/usr/bin/codex-pet" <<'EOF'
 exec /usr/bin/python3 /usr/share/codex-pet/codex_pet.py "$@"
 EOF
 chmod 755 "$stage/usr/bin/codex-pet"
+cat > "$stage/usr/bin/codex-pet-import" <<'EOF'
+#!/bin/sh
+exec /usr/bin/python3 /usr/share/codex-pet/import_bailong.py "$@"
+EOF
+chmod 755 "$stage/usr/bin/codex-pet-import"
 install -m 644 "$base/packaging/codex-pet.desktop" "$stage/usr/share/applications/"
-dpkg-deb --build --root-owner-group "$stage" "$out/codex-pet_1.2.0_all.deb"
+dpkg-deb --build --root-owner-group "$stage" "$out/codex-pet_2.2.0_all.deb"

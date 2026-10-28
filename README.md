@@ -1,42 +1,77 @@
 # Codex Pet
 
-A standalone dragon desktop companion, based on the supplied character
-reference. She blinks, responds to your clicks with a greeting and a two-frame waving
-animation, and can patrol across the desktop. Her patrol moves the whole illustrated
-pose; it is not a frame-by-frame walking animation or a skeletal rig.
+A desktop companion with an original dragon character and an optional Q-style
+white dragon. Both windows are independently draggable and share a conversation,
+task and quota panel. The original dragon blinks and crossfades between greeting
+poses; its patrol moves the illustrated figure as a whole, not a walking rig.
 
 ## Install or upgrade
 
 Build with `./build-deb.sh`. Install the resulting package with:
 
 ```sh
-sudo apt install ./dist/codex-pet_1.2.0_all.deb
+sudo apt install ./dist/codex-pet_2.2.0_all.deb
 ```
 
-If the previous pet is already open, right-click it and choose **退出** (Quit)
-before starting the new version: upgrading the package does not replace a
-running process. Open **Codex Pet** from the application menu, or run
-`codex-pet` in a terminal.
+Quit an already-running older version through its right-click menu before
+starting the new version. Open **Codex Pet** from the application menu, or run
+`codex-pet` in a terminal. The package depends on PyQt5, Pillow, Requests,
+PyJWT and cryptography; apt installs these dependencies.
+
+The third-party Q character art is not redistributed in the package or Git.
+To use the copy already supplied by the user, import it once:
+
+```sh
+codex-pet-import /home/tq/codex-pet.tar.xz
+```
+
+This imports only the character's WebP files, catalogue and provenance into
+`${XDG_DATA_HOME:-$HOME/.local/share}/codex-pet/bailong`. It refuses to overwrite
+an existing directory. Restart the pet after importing. If the art is absent or
+unusable, the original dragon still runs, and the terminal shows a reason.
 
 ## Interaction
 
-- Click her to receive a greeting. Double-click for a different greeting.
-- Drag with the left mouse button to move her.
-- Right-click for the menu: greet, replay the arrival, turn desktop patrol on
-  or off, or quit. On X11, patrol is enabled initially; she pauses between
-  movements and turns around at the screen edges. It can be distracting, so
-  it can be disabled in that menu.
+- Click either character for a greeting; drag it to move it. The Q character
+  plays drag and landing sequences; its animations use the catalogue's timing
+  and alignment. The player keeps one Q animation source and one displayed frame at a time; the WebP decoder may use additional working memory.
+- Right-click either character to open the shared panel, view quota, change that
+  character's size, hide or restore the other character, or quit. The final
+  visible character cannot be hidden so the controls remain accessible.
+- The original dragon has a replay command and an optional desktop patrol. Q
+  animations for work, completion and quota are connected to panel events.
 
-This application is independent of the VS Code Codex extension: its arrival
-animation plays when **the pet** launches. The desktop must support transparent
-windows and compositing. Transparent areas of the window may still receive
-clicks. Desktop window managers may ignore always-on-top hints.
+Transparent windows require a desktop compositor; transparent portions can
+still receive clicks and a window manager can ignore always-on-top hints. On
+native Wayland automatic patrol is disabled, and dragging uses the compositor's
+system move; its availability and window positioning depend on the compositor.
 
-On native Wayland, automatic patrol is disabled because ordinary applications
-cannot set their window position; dragging requests a compositor-managed move,
-whose availability depends on the compositor. X11/XWayland behavior can vary
-with the window manager. The transparent window needs an X11 compositing window
-manager on X11.
+## Chat, planning, tasks and usage
+
+Open **對話與任務** or **查看額度** from either character's right-click menu.
+The three modes explicitly use different routes:
+
+- **普通對話** uses this app's Sign in with ChatGPT authorization and sends a
+  streamed text request without local tools.
+- **計劃** uses that authorization with Codex App Server in Plan mode and a
+  read-only sandbox. Select a work directory first. The plan server uses a
+  separate configuration directory, with external integrations disabled.
+- **任務** uses the existing Codex ChatGPT login, asks for a work directory,
+  and exposes supported approval requests. An API-key login is rejected.
+
+Click **登入 ChatGPT** to authorize this application in a browser. Credentials
+are stored in `~/.config/codex-pet/` with owner-only file permissions, separate
+from Codex's own credentials. If available, email addresses are compared; a
+mismatch is rejected. An absent email or unverified workspace is reported, not
+treated as a verified match. Models for the authorized route are obtained from
+the account's model catalog; the first visible model is currently selected.
+
+All three routes use ChatGPT plan access; none silently falls back to an API
+key. Plan usage may share Codex or application limits, and purchased ChatGPT
+credits can apply according to account settings. Codex quota is displayed only
+when returned by App Server; the usage settings link opens ChatGPT's controls.
+The authorized plan route is subject to OpenAI's eligibility and preview
+limitations. Authorization does not grant access to ChatGPT conversation history.
 
 ## Development
 
@@ -47,6 +82,5 @@ Run `/usr/bin/python3 src/codex_pet.py`. Tests:
 QT_QPA_PLATFORM=offscreen /usr/bin/python3 src/codex_pet.py --quit-after-ms 4000
 ```
 
-The pose PNGs `dragon-lady.png`, `blink.png`, `wave.png` and `wave2.png` in `assets/` are
-required by the app and the package. The installed files are placed alongside
-the Python scripts in `/usr/share/codex-pet/`.
+The original PNG poses in `assets/` are included in the package. User-imported
+art remains outside the package and its original permissions apply.
