@@ -59,6 +59,9 @@ QScrollArea#conversation { background: #fffdfd; border: 1px solid #eae4f0; borde
 QListWidget#imageList { background: #f9f6fc; border: 1px solid #e3d9ed; border-radius: 8px; padding: 3px; }
 QListWidget#imageList::item:selected { background: #e4d7f1; color: #473b55; }
 QScrollArea#limitsScroll { background: transparent; border: 0; }
+QScrollArea#optionsScroll { background: transparent; border: 0; }
+QScrollArea#optionsScroll QScrollBar:vertical { width: 12px; margin: 3px 1px; }
+QWidget#optionsContent { background: transparent; }
 QWidget#limitsContent { background: #faf8fd; }
 QWidget#messages { background: transparent; }
 QTextEdit#assistantBubble { color: #4c4056; background: #f3eef9; border: 1px solid #ebe2f3; border-radius: 12px; padding: 11px 13px; }
@@ -513,6 +516,14 @@ class PetPanel(QDialog):
         self.model_refresh.clicked.connect(self._refresh_models)
         options.addWidget(self.model_refresh)
         card_layout.addLayout(options)
+        # Keep mode and model visible while the remaining settings scroll.
+        fixed_layout = card_layout
+        detail = QWidget()
+        detail.setObjectName('optionsContent')
+        card_layout = QVBoxLayout(detail)
+        card_layout.setContentsMargins(0, 0, 0, 0)
+        card_layout.setSpacing(4)
+        card_layout.setAlignment(Qt.AlignTop)
         model_options = QHBoxLayout()
         self.effort_label = QLabel('推理强度')
         self.effort = ModeSelector()
@@ -570,14 +581,16 @@ class PetPanel(QDialog):
         self.permission_notice.setWordWrap(True)
         card_layout.addWidget(self.permission_notice)
         self.options_scroll = QScrollArea()
+        self.options_scroll.setObjectName('optionsScroll')
         self.options_scroll.setWidgetResizable(True)
         self.options_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         self.options_scroll.setFrameShape(QFrame.NoFrame)
         self.options_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.options_scroll.setMaximumHeight(250)
-        self.options_scroll.setMinimumHeight(120)
-        self.options_scroll.setWidget(card)
-        layout.addWidget(self.options_scroll)
+        self.options_scroll.setMaximumHeight(190)
+        self.options_scroll.setMinimumHeight(85)
+        self.options_scroll.setWidget(detail)
+        fixed_layout.addWidget(self.options_scroll)
+        layout.addWidget(card)
         self._schedule_options_height()
         self.transcripts = {mode: ChatTranscript() for mode in ('chat', 'plan', 'task')}
         self.transcript_stack = QStackedWidget()
@@ -1570,8 +1583,8 @@ class PetPanel(QDialog):
             return
         card = self.options_scroll.widget()
         card.layout().activate()
-        cap = 200 if self.height() < 700 else 250
-        self.options_scroll.setMaximumHeight(max(120, min(cap, card.sizeHint().height() + 2)))
+        cap = 125 if self.height() < 700 else 175
+        self.options_scroll.setMaximumHeight(max(85, min(cap, card.sizeHint().height() + 2)))
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

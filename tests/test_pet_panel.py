@@ -1149,6 +1149,20 @@ class PanelTests(unittest.TestCase):
         self.assertTrue(scroll.viewport().rect().contains(
             self.panel.permission.mapTo(scroll.viewport(), self.panel.permission.rect().center())))
         self.assertIn('选择本次执行权限', self.panel.status.text())
+        # Mode and model remain visible even when the permission at the
+        # bottom of the scrollable settings has been brought into view.
+        page = self.panel.tabs.currentWidget()
+        for selector in (self.panel.mode, self.panel.model):
+            self.assertTrue(page.rect().contains(selector.mapTo(page, selector.rect().center())))
+            self.assertFalse(scroll.isAncestorOf(selector))
+        scroll.verticalScrollBar().setValue(0)
+        QTest.qWait(10)
+        self.assertTrue(scroll.viewport().rect().contains(
+            self.panel.threads_button.mapTo(scroll.viewport(), self.panel.threads_button.rect().center())))
+        scroll.verticalScrollBar().setValue(scroll.verticalScrollBar().maximum())
+        QTest.qWait(10)
+        self.assertTrue(scroll.viewport().rect().contains(
+            self.panel.permission.mapTo(scroll.viewport(), self.panel.permission.rect().center())))
 
     def test_closed_picker_waits_for_inflight_result_before_reopen(self):
         self.panel.mode.setCurrentIndex(2)

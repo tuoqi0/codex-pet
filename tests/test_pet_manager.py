@@ -737,6 +737,66 @@ class ManagerIntegrationTests(unittest.TestCase):
             manager.qpet.press_global = None
             manager.qpet.show()
 
+    def test_work_animation_variety_respects_interactions_and_completion(self):
+        manager = self.manager
+        pet = manager.qpet
+        for ident in ('work01', 'work03', 'work04', 'work05'):
+            pet.player.entries[ident] = {'id': ident, 'file': 'idle.webp'}
+        manager.play_action('work')
+        self.assertEqual(pet.player.current, 'work01')
+        self.assertEqual(pet.player.default_animation, 'work02')
+        pet.player.advance()
+        self.assertEqual(pet.player.current, 'work02')
+        manager.q_work.next_action = 0
+        pet.hide()
+        manager.companion_tick()
+        self.assertEqual(pet.player.current, 'work02')
+        pet.show()
+        pet.press_global = QPoint(5, 5)
+        manager.companion_tick()
+        self.assertEqual(pet.player.current, 'work02')
+        pet.press_global = None
+        pet.speech.show_message('请稍等', pet)
+        manager.companion_tick()
+        self.assertEqual(pet.player.current, 'work02')
+        pet.speech.hide()
+        manager.companion_tick()
+        self.assertIn(pet.player.current, ('work03', 'work04', 'work05'))
+        manager.play_action('idle')
+        self.assertEqual(pet.player.current, 'idle')
+        self.assertIsNone(manager.q_work.next_action)
+        manager.companion_tick()
+        self.assertEqual(pet.player.current, 'idle')
+
+    def test_unreadable_work_intro_falls_back_to_work_loop(self):
+        manager = self.manager
+        pet = manager.qpet
+        pet.player.entries['work01'] = {'id': 'work01', 'file': 'missing.webp'}
+        errors = []
+        pet.player.error.connect(errors.append)
+        manager.play_action('work')
+        self.assertEqual(pet.player.current, 'work02')
+        self.assertEqual(pet.player.default_animation, 'work02')
+        self.assertTrue(any('work01' in error for error in errors))
+
+    def test_work_rotation_does_not_restart_after_drag_or_cancel(self):
+        manager = self.manager
+        pet = manager.qpet
+        pet.player.entries['work03'] = {'id': 'work03', 'file': 'idle.webp'}
+        manager.play_action('work')
+        manager.q_work.next_action = 0
+        pet.press_global = QPoint(5, 5)
+        pet.player.play('drag')
+        manager.companion_tick()
+        self.assertEqual(pet.player.current, 'drag')
+        manager.play_action('idle')
+        pet.press_global = None
+        pet.player.play('landing')
+        manager.companion_tick()
+        pet.player.advance()
+        self.assertEqual(pet.player.current, 'idle')
+        self.assertIsNone(manager.q_work.next_action)
+
     def test_quota_does_not_interrupt_work_animation(self):
         manager = self.manager
         manager.play_action('work')

@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
-from q_idle import QIdleDirector
+from q_idle import QIdleDirector, QWorkDirector
 
 
 class PredictableRandom:
@@ -73,6 +73,37 @@ class IdleTests(unittest.TestCase):
         self.assertIsNone(self.director.tick(10, True, self.player))
         self.assertIsNone(self.director.tick(34, True, self.player))
         self.assertEqual(self.director.tick(35, True, self.player), 'idle2')
+
+
+class WorkTests(unittest.TestCase):
+    def setUp(self):
+        self.director = QWorkDirector(PredictableRandom())
+        self.player = Player(('work03', 'work04', 'work05'))
+        self.player.current = 'work02'
+        self.director.start(0)
+
+    def test_waits_then_rotates_without_preempting_gestures(self):
+        self.assertIsNone(self.director.tick(29, True, self.player))
+        self.assertIsNone(self.director.tick(30, False, self.player))
+        self.player.current = 'drag'
+        self.assertIsNone(self.director.tick(31, True, self.player))
+        self.player.current = 'work02'
+        self.assertEqual(self.director.tick(32, True, self.player), 'work03')
+        self.player.current = 'work02'
+        self.assertEqual(self.director.tick(62, True, self.player), 'work04')
+        self.director.stop()
+        self.player.current = 'work02'
+        self.assertIsNone(self.director.tick(100, True, self.player))
+
+    def test_missing_or_failing_optional_asset_retries_without_falsifying_state(self):
+        self.player.entries = {}
+        self.assertIsNone(self.director.tick(30, True, self.player))
+        self.player.entries = {'work03': {}}
+        self.player.success = False
+        self.assertIsNone(self.director.tick(60, True, self.player))
+        self.player.success = True
+        self.assertIsNone(self.director.tick(67, True, self.player))
+        self.assertEqual(self.director.tick(68, True, self.player), 'work03')
 
 
 if __name__ == '__main__':

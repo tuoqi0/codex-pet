@@ -487,7 +487,7 @@ class PetManager:
     """Keep the characters independent while sharing one conversation panel."""
     def __init__(self):
         from companion import CompanionScheduler, CompanionSettings, CompanionSettingsStore
-        from q_idle import QIdleDirector
+        from q_idle import QIdleDirector, QWorkDirector
         from weather import WeatherClient
         from import_bailong import default_destination
         from window_preferences import WindowPreferencesStore
@@ -505,6 +505,7 @@ class PetManager:
         now = time.monotonic()
         self.companion = CompanionScheduler(now, settings)
         self.q_idle = QIdleDirector(now)
+        self.q_work = QWorkDirector()
         self.weather = WeatherClient()
         self.weather_generation = 0
         self.weather_due = now + 15
@@ -706,6 +707,11 @@ class PetManager:
                 QTimer.singleShot(900, q_reply)
         if self.qpet:
             self.q_idle.tick(now, self.qpet.isVisible() and self._available(), self.qpet.player)
+            q = self.qpet
+            work_available = (self.dragon.behavior.activity == 'work' and q.isVisible()
+                              and q.press_global is None and not q.click_timer.isActive()
+                              and not q.speech.isVisible() and now >= q.message_until)
+            self.q_work.tick(now, work_available, q.player)
         wall_now = time.time()
         wall_due = wall_now >= self.weather_wall_due
         from weather import location_day_changed
@@ -1084,7 +1090,13 @@ class PetManager:
         # working instead of interrupting their animation with a quota lookup.
         if action == 'quota' and self.dragon.behavior.activity == 'work':
             return
-        self.dragon.behavior.set_activity(action, time.monotonic())
+        now = time.monotonic()
+        starting_work = action == 'work' and self.dragon.behavior.activity != 'work'
+        if starting_work:
+            self.q_work.start(now)
+        elif action != 'work':
+            self.q_work.stop()
+        self.dragon.behavior.set_activity(action, now)
         self.dragon.update()
         if self.qpet:
             ident = {'work': 'work02', 'celebrate': '18', 'quota': 'quota'}.get(action, 'idle')
@@ -1093,7 +1105,12 @@ class PetManager:
             # A status update can arrive during a mouse gesture. Let the
             # drag and landing finish, then resume the latest activity.
             if self.qpet.press_global is None and player.current != 'landing':
-                player.play(ident)
+                if (starting_work and self.qpet.isVisible() and player.current == 'idle'
+                        and not self.qpet.speech.isVisible() and not self.qpet.click_timer.isActive()
+                        and now >= self.qpet.message_until and 'work01' in player.entries):
+                    ident = 'work01'
+                if not player.play(ident) and ident == 'work01':
+                    player.play('work02')
 
     def open_panel(self, page='chat'):
         panel = self._ensure_panel()

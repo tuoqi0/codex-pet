@@ -49,3 +49,39 @@ class QIdleDirector:
         self.idle_since = None
         self.next_action = now + self.rng.uniform(*self.ACTION_DELAY)
         return chosen
+
+
+class QWorkDirector:
+    """Occasional visual variety during a task; animation is not tool telemetry."""
+    CANDIDATES = ('work03', 'work04', 'work05')
+    ACTION_DELAY = (30.0, 60.0)
+    RETRY_DELAY = (8.0, 15.0)
+
+    def __init__(self, rng=None):
+        self.rng = rng or random.Random()
+        self.next_action = None
+        self.last_action = None
+
+    def start(self, now):
+        self.next_action = now + self.rng.uniform(*self.ACTION_DELAY)
+        self.last_action = None
+
+    def stop(self):
+        self.next_action = None
+
+    def tick(self, now, available, player):
+        if self.next_action is None or now < self.next_action or not available or player.current != 'work02':
+            return None
+        choices = [ident for ident in self.CANDIDATES if ident in player.entries]
+        if len(choices) > 1 and self.last_action in choices:
+            choices.remove(self.last_action)
+        if not choices:
+            self.next_action = now + self.rng.uniform(*self.ACTION_DELAY)
+            return None
+        chosen = self.rng.choice(choices)
+        if not player.play(chosen):
+            self.next_action = now + self.rng.uniform(*self.RETRY_DELAY)
+            return None
+        self.last_action = chosen
+        self.next_action = now + self.rng.uniform(*self.ACTION_DELAY)
+        return chosen
