@@ -19,6 +19,20 @@ def default_destination():
     return root / 'codex-pet/bailong'
 
 
+def bundled_destination():
+    """Find assets beside installed modules, or in a source checkout."""
+    module_dir = Path(__file__).resolve().parent
+    installed = module_dir / 'bailong'
+    if installed.is_dir():
+        return installed
+    return module_dir.parent / 'assets' / 'bailong'
+
+
+def asset_candidates():
+    """User-provided assets take precedence over the bundled catalogue."""
+    return (default_destination(), bundled_destination())
+
+
 def import_assets(archive, destination):
     destination = Path(destination)
     if destination.exists():

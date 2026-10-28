@@ -1,0 +1,377 @@
+{
+  "version": 1,
+  "character": "白龙娘",
+  "idle": {
+    "id": "idle",
+    "file": "待机/待机-透明.webp",
+    "durationMs": 4000,
+    "loop": true,
+    "renderScale": 1.0,
+    "renderOffset": [
+      0.0,
+      0.0
+    ],
+    "renderAnchor": "bottom-center",
+    "playbackFile": "待机/待机-透明.webp"
+  },
+  "additionalIdleAnimations": [
+    {
+      "id": "idle2",
+      "name": "待机动作2",
+      "file": "待机动作2/待机动作2-透明.webp",
+      "durationMs": 4000,
+      "loop": true,
+      "renderScale": 1.0049342105263157,
+      "renderOffset": [
+        0.0013923154239766373,
+        0.004523026315789499
+      ],
+      "renderAnchor": "bottom-center",
+      "playbackFile": "待机动作2/待机动作2-透明.webp"
+    }
+  ],
+  "variants": [
+    {
+      "id": "01",
+      "name": "招手/打招呼",
+      "file": "差分01-招手-最新版/差分01-招手-透明.webp",
+      "durationMs": 4000,
+      "line": "主人来啦！今天也一起把小事做好吧。",
+      "bubble": "由桌宠程序独立显示",
+      "renderScale": 1.0115894039735098,
+      "renderOffset": [
+        0.00139693708609272,
+        0.01343359087564377
+      ],
+      "renderAnchor": "bottom-center",
+      "playbackFile": "差分01-招手-最新版/差分01-招手-透明.webp"
+    },
+    {
+      "id": "04",
+      "name": "灵感",
+      "file": "差分04-灵感/差分04-灵感-透明.webp",
+      "durationMs": 4000,
+      "line": "叮！主人，我抓到一只好点子！",
+      "bubble": "由桌宠程序独立显示",
+      "renderScale": 1.0082508250825082,
+      "renderOffset": [
+        0.0027949669966996597,
+        0.007563256325632513
+      ],
+      "renderAnchor": "bottom-center",
+      "playbackFile": "差分04-灵感/差分04-灵感-透明.webp"
+    },
+    {
+      "id": "05",
+      "name": "得意",
+      "file": "差分05-得意/差分05-得意-透明.webp",
+      "durationMs": 4000,
+      "line": "哼哼，主人，这题被我拿下啦。",
+      "bubble": "由桌宠程序独立显示",
+      "renderScale": 0.9791666666666666,
+      "renderOffset": [
+        0.0034143518518518256,
+        -0.019097222222222224
+      ],
+      "renderAnchor": "bottom-center",
+      "playbackFile": "差分05-得意/差分05-得意-透明.webp"
+    },
+    {
+      "id": "08",
+      "name": "贴贴",
+      "file": "差分08-贴贴/差分08-贴贴-透明.webp",
+      "durationMs": 4000,
+      "line": "给主人一个小小的龙龙抱抱。",
+      "bubble": "由桌宠程序独立显示",
+      "renderScale": 1.0183333333333333,
+      "renderOffset": [
+        -0.0007199074074073843,
+        0.011148148148148114
+      ],
+      "renderAnchor": "bottom-center",
+      "playbackFile": "差分08-贴贴/差分08-贴贴-透明.webp"
+    },
+    {
+      "id": "09",
+      "name": "傲娇",
+      "file": "差分09-傲娇/差分09-傲娇-透明.webp",
+      "durationMs": 4000,
+      "line": "才没有一直等主人……就一小会儿。",
+      "bubble": "由桌宠程序独立显示",
+      "renderScale": 1.0049342105263157,
+      "renderOffset": [
+        -3.426535087748385e-06,
+        0.010105994152046726
+      ],
+      "renderAnchor": "bottom-center",
+      "playbackFile": "差分09-傲娇/差分09-傲娇-透明.webp"
+    },
+    {
+      "id": "13",
+      "name": "小生气",
+      "file": "差分13-小生气/差分13-小生气-透明.webp",
+      "durationMs": 4000,
+      "line": "主人别急！这个坏问题，我要拆成小块解掉！",
+      "bubble": "由桌宠程序独立显示",
+      "renderScale": 1.0115894039735098,
+      "renderOffset": [
+        0.00139693708609272,
+        0.010623620309050825
+      ],
+      "renderAnchor": "bottom-center",
+      "playbackFile": "差分13-小生气/差分13-小生气-透明.webp"
+    },
+    {
+      "id": "14",
+      "name": "困倦",
+      "file": "差分14-困倦-最新版/差分14-困倦-透明.webp",
+      "durationMs": 4000,
+      "line": "哈啊……借主人的桌角打个小盹。",
+      "bubble": "由桌宠程序独立显示",
+      "renderScale": 1.0115894039735098,
+      "renderOffset": [
+        0.00139693708609272,
+        0.010623620309050825
+      ],
+      "renderAnchor": "bottom-center",
+      "playbackFile": "差分14-困倦-最新版/差分14-困倦-透明.webp"
+    },
+    {
+      "id": "17",
+      "name": "偷吃",
+      "file": "差分17-偷吃-吃饼干新版/差分17-偷吃-透明.webp",
+      "durationMs": 5042,
+      "line": "主人，这块饼干……是思考用的燃料！",
+      "bubble": "由桌宠程序独立显示",
+      "renderScale": 1.0115894039735098,
+      "renderOffset": [
+        -0.0014130334805003697,
+        0.010607523914643036
+      ],
+      "renderAnchor": "bottom-center",
+      "playbackFile": "差分17-偷吃-吃饼干新版/差分17-偷吃-透明.webp"
+    },
+    {
+      "id": "18",
+      "name": "庆祝",
+      "file": "差分18-庆祝/差分18-庆祝-透明.webp",
+      "durationMs": 4000,
+      "line": "完成啦！给主人和我各贴一颗小星星！",
+      "bubble": "由桌宠程序独立显示",
+      "renderScale": 1.0082508250825082,
+      "renderOffset": [
+        -5.729739640653659e-06,
+        0.010363953061972906
+      ],
+      "renderAnchor": "bottom-center",
+      "playbackFile": "差分18-庆祝/差分18-庆祝-透明.webp"
+    },
+    {
+      "id": "20",
+      "name": "比心",
+      "file": "差分20-比心/差分20-比心-透明.webp",
+      "durationMs": 4000,
+      "line": "今日份喜欢，已经送到主人的桌面啦。",
+      "bubble": "由桌宠程序独立显示",
+      "renderScale": 1.0183333333333333,
+      "renderOffset": [
+        0.002815972222222185,
+        0.013951388888888916
+      ],
+      "renderAnchor": "bottom-center",
+      "playbackFile": "差分20-比心/差分20-比心-透明.webp"
+    },
+    {
+      "id": "21",
+      "name": "龙族契约",
+      "file": "差分21-龙族契约-新版/差分21-龙族契约-透明.webp",
+      "durationMs": 4042,
+      "line": "以龙角为誓，以龙翼为约……主人，请允许我成为你的白龙眷属。",
+      "bubble": "由桌宠程序独立显示",
+      "renderScale": 0.9760383386581469,
+      "renderOffset": [
+        0.002727857649982235,
+        -0.011086705715299905
+      ],
+      "renderAnchor": "bottom-center",
+      "playbackFile": "差分21-龙族契约-新版/差分21-龙族契约-透明.webp"
+    },
+    {
+      "id": "22",
+      "name": "眷属印记",
+      "file": "差分22-眷属印记/差分22-眷属印记-透明.webp",
+      "durationMs": 4000,
+      "line": "印记亮起来啦！从今天起，我就是主人的白龙眷属了。",
+      "bubble": "由桌宠程序独立显示",
+      "renderScale": 1.0082508250825082,
+      "renderOffset": [
+        -5.729739640653659e-06,
+        0.010363953061972906
+      ],
+      "renderAnchor": "bottom-center",
+      "playbackFile": "差分22-眷属印记/差分22-眷属印记-透明.webp"
+    },
+    {
+      "id": "24",
+      "name": "宝藏收藏",
+      "file": "差分24-宝藏收藏-新版/差分24-宝藏收藏-透明.webp",
+      "durationMs": 6042,
+      "line": "金币、宝石，还有主人……都是我的宝贝！",
+      "bubble": "由桌宠程序独立显示",
+      "renderScale": 0.9823151125401929,
+      "renderOffset": [
+        -0.0068093515541264305,
+        -0.0025433190425151464
+      ],
+      "renderAnchor": "bottom-center",
+      "playbackFile": "差分24-宝藏收藏-新版/差分24-宝藏收藏-透明.webp"
+    },
+    {
+      "id": "25",
+      "name": "幼龙吐息",
+      "file": "差分25-幼龙吐息/差分25-幼龙吐息-透明.webp",
+      "durationMs": 4000,
+      "line": "呼——这是小龙吐息！只烤棉花糖，不烤主人。",
+      "bubble": "由桌宠程序独立显示",
+      "renderScale": 1.001639344262295,
+      "renderOffset": [
+        -1.138433515516605e-06,
+        0.0015027322404370757
+      ],
+      "renderAnchor": "bottom-center",
+      "playbackFile": "差分25-幼龙吐息/差分25-幼龙吐息-透明.webp"
+    },
+    {
+      "id": "26",
+      "name": "逆鳞信任",
+      "file": "差分26-逆鳞信任-新版/差分26-逆鳞信任-透明.webp",
+      "durationMs": 4042,
+      "line": "这片逆鳞，只有你可以碰。要轻轻的哦，主人。",
+      "bubble": "由桌宠程序独立显示",
+      "renderScale": 1.0082508250825082,
+      "renderOffset": [
+        0.002794966996699677,
+        0.010352493582691524
+      ],
+      "renderAnchor": "bottom-center",
+      "playbackFile": "差分26-逆鳞信任-新版/差分26-逆鳞信任-透明.webp"
+    }
+  ],
+  "dragAnimation": {
+    "id": "drag",
+    "name": "拖拽",
+    "file": "拖拽动作/拖拽-透明.webp",
+    "durationMs": 4000,
+    "renderScale": 1.0049342105263157,
+    "renderOffset": [
+      -0.003492781432748555,
+      0.007314510233918112
+    ],
+    "renderAnchor": "bottom-center",
+    "playbackFile": "拖拽动作/拖拽-透明.webp"
+  },
+  "landingAnimation": {
+    "id": "landing",
+    "name": "落地",
+    "file": "落地动作/落地-透明.webp",
+    "durationMs": 2000,
+    "renderScale": 1.0049342105263157,
+    "renderOffset": [
+      -0.003492781432748555,
+      0.007314510233918112
+    ],
+    "renderAnchor": "bottom-center",
+    "playbackFile": "落地动作/落地-透明.webp"
+  },
+  "quotaAnimation": {
+    "id": "quota",
+    "name": "查阅额度",
+    "file": "查阅额度/查询-透明.webp",
+    "durationMs": 4000,
+    "renderScale": 0.9622047244094488,
+    "renderAnchor": "bottom-center",
+    "renderOffset": [
+      2.624671916006744e-05,
+      0.0014370078740157054
+    ],
+    "playbackFile": "查阅额度/查询-透明.webp"
+  },
+  "workAnimations": [
+    {
+      "id": "work01",
+      "name": "收到任务",
+      "renderScale": 1.0082508250825082,
+      "renderOffset": [
+        -5.729739640636389e-06,
+        0.010352493582691524
+      ],
+      "renderAnchor": "bottom-center",
+      "file": "工作01-收到任务-新版/工作01-收到任务-透明.webp",
+      "durationMs": 4042,
+      "line": "收到啦，主人！让我先把你的叮嘱认真记下来。",
+      "bubble": "仅手动互动触发，自动工作播放不显示台词",
+      "playbackFile": "工作01-收到任务-新版/工作01-收到任务-透明.webp"
+    },
+    {
+      "id": "work02",
+      "name": "处理任务",
+      "renderScale": 1.0,
+      "renderOffset": [
+        0,
+        0
+      ],
+      "renderAnchor": "bottom-center",
+      "file": "工作02-处理任务/工作02-处理任务-透明.webp",
+      "durationMs": 6042,
+      "line": "主人，代码正在小爪爪下面乖乖排队呢。",
+      "bubble": "仅手动互动触发，自动工作播放不显示台词",
+      "playbackFile": "工作02-处理任务/工作02-处理任务-透明.webp"
+    },
+    {
+      "id": "work03",
+      "name": "整理归档文件",
+      "file": "工作03-整理归档文件/工作03-整理归档文件-透明.webp",
+      "durationMs": 5042,
+      "renderScale": 1.0183333333333333,
+      "renderOffset": [
+        -1.2731481481509377e-05,
+        0.013951388888888916
+      ],
+      "renderAnchor": "bottom-center",
+      "line": "主人，小文件都归好位啦，找起来就方便多了。",
+      "bubble": "仅手动互动触发，自动工作播放不显示台词",
+      "playbackFile": "工作03-整理归档文件/工作03-整理归档文件-透明.webp"
+    },
+    {
+      "id": "work04",
+      "name": "翻阅工作资料",
+      "file": "工作04-翻阅工作资料/工作04-翻阅工作资料-透明.webp",
+      "durationMs": 5042,
+      "renderScale": 1.0115894039735098,
+      "renderOffset": [
+        -0.0014130334805003697,
+        0.013417494481236303
+      ],
+      "renderAnchor": "bottom-center",
+      "line": "主人，让我翻翻资料，好答案就藏在这些书页里。",
+      "bubble": "仅手动互动触发，自动工作播放不显示台词",
+      "playbackFile": "工作04-翻阅工作资料/工作04-翻阅工作资料-透明.webp"
+    },
+    {
+      "id": "work05",
+      "name": "放大镜查看细节",
+      "file": "工作05-放大镜查看细节/工作05-放大镜查看细节-透明.webp",
+      "durationMs": 4042,
+      "renderScale": 1.0115894039735098,
+      "renderOffset": [
+        0.001396937086092731,
+        0.010607523914643036
+      ],
+      "renderAnchor": "bottom-center",
+      "line": "主人，让我仔细瞧瞧，小细节也逃不过龙娘的眼睛。",
+      "bubble": "仅手动互动触发，自动工作播放不显示台词",
+      "playbackFile": "工作05-放大镜查看细节/工作05-放大镜查看细节-透明.webp"
+    },
+    null
+  ]
+}

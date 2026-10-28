@@ -501,7 +501,7 @@ class PetManager:
         from companion import CompanionScheduler, CompanionSettings, CompanionSettingsStore
         from q_idle import QIdleDirector, QWorkDirector
         from weather import WeatherClient
-        from import_bailong import default_destination
+        from import_bailong import asset_candidates
         from window_preferences import WindowPreferencesStore
         self.panel = None
         self.floating = None
@@ -538,8 +538,10 @@ class PetManager:
         self.weather_bridge = _WeatherBridge(self.dragon)
         self.weather_bridge.received.connect(self._weather_result)
         self.qpet = None
-        root = default_destination()
-        if root.exists():
+        roots = asset_candidates()
+        for root in roots:
+            if not root.is_dir():
+                continue
             try:
                 self.qpet = QPet(self, root)
                 self.qpet.set_scale(self.window_preferences.qpet.scale)
@@ -551,10 +553,11 @@ class PetManager:
                                             area.bottom() - self.qpet.height() + 1))
                     self.qpet.move(x, y)
                     self._restore_window(self.qpet, self.window_preferences.qpet)
+                break
             except (OSError, ValueError, ImportError) as exc:
-                print(f'白龙素材无法使用：{exc}', file=sys.stderr)
-        else:
-            print(f'白龙素材尚未导入：codex-pet-import <素材压缩包路径>（目录：{root}）', file=sys.stderr)
+                print(f'白龙素材无法使用（{root}）：{exc}', file=sys.stderr)
+        if self.qpet is None:
+            print(f'白龙素材不可用：请检查内置素材或使用 codex-pet-import <素材压缩包路径>（目录：{roots[0]}）', file=sys.stderr)
         from window_preferences import ensure_visible
         available = {'dragon', 'qpet'} if self.qpet else {'dragon'}
         visible_preferences = ensure_visible(self.window_preferences, available)

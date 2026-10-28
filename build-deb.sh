@@ -12,7 +12,7 @@ mkdir -p "$stage/DEBIAN" "$stage/usr/bin" "$stage/usr/share/codex-pet" \
     "$stage/usr/share/applications" "$stage/usr/share/pixmaps"
 cat > "$stage/DEBIAN/control" <<'EOF'
 Package: codex-pet
-Version: 2.27.0
+Version: 2.28.0
 Section: utils
 Priority: optional
 Architecture: all
@@ -28,6 +28,8 @@ done
 for asset in dragon-lady.png opening-sprite.png dragon-seated.png dragon-seated-blink.png dragon-seated-wave.png dragon-seated-wave2.png dragon-seated-tea.png dragon-seated-happy.png dragon-seated-work.png wing-cutout.png wing-underlay.png wing-left.png wing-right.png; do
     install -m 644 "$base/assets/$asset" "$stage/usr/share/codex-pet/$asset"
 done
+cp -a "$base/assets/bailong" "$stage/usr/share/codex-pet/bailong"
+chmod -R a+rX "$stage/usr/share/codex-pet/bailong"
 install -m 644 "$base/assets/dragon-lady.png" "$stage/usr/share/pixmaps/codex-pet.png"
 mkdir -p "$stage/usr/share/codex-pet/opening"
 for source in "$base"/opening/patch.py "$base"/opening/opening.css "$base"/opening/opening.js "$base"/opening/desktop_entry.py "$base"/opening/desktop_splash.py; do
@@ -54,4 +56,4 @@ exec /usr/bin/python3 /usr/share/codex-pet/opening/desktop_entry.py "$@"
 EOF
 chmod 755 "$stage/usr/bin/codex-pet-desktop-opening"
 install -m 644 "$base/packaging/codex-pet.desktop" "$stage/usr/share/applications/"
-dpkg-deb --build --root-owner-group "$stage" "$out/codex-pet_2.27.0_all.deb"
+dpkg-deb --build --root-owner-group "$stage" "$out/codex-pet_2.28.0_all.deb"

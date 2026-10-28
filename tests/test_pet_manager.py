@@ -64,6 +64,7 @@ class ManagerIntegrationTests(unittest.TestCase):
             mock.patch.object(companion, 'CompanionSettingsStore', return_value=store),
             mock.patch.object(window_preferences, 'WindowPreferencesStore', return_value=self.window_store),
             mock.patch.object(import_bailong, 'default_destination', return_value=assets),
+            mock.patch.object(import_bailong, 'bundled_destination', return_value=root / 'missing-bundled'),
             mock.patch.object(weather, 'WeatherClient', return_value=fake_weather),
             mock.patch.object(pet_panel, 'PetPanel', side_effect=lambda **kw: real_panel(backend_factory=FakeBackend, **kw)),
         ]
@@ -216,6 +217,39 @@ class ManagerIntegrationTests(unittest.TestCase):
             single.interaction_timer.stop()
             single.companion_timer.stop()
             single.dragon.close()
+
+    def test_bundled_assets_used_when_user_assets_absent_or_invalid(self):
+        bundled = Path(self.temp.name) / 'bundled'
+        bundled.mkdir()
+        Image.new('RGBA', (10, 10), 'blue').save(bundled / 'idle.webp')
+        (bundled / '素材清单.json').write_text(json.dumps({'idle': {'id': 'idle', 'file': 'idle.webp'}}), encoding='utf8')
+        bad = Path(self.temp.name) / 'invalid'
+        bad.mkdir()
+        for user in (Path(self.temp.name) / 'missing', bad):
+            with self.subTest(user=user), mock.patch.object(import_bailong, 'default_destination', return_value=user), \
+                 mock.patch.object(import_bailong, 'bundled_destination', return_value=bundled):
+                manager = codex_pet.PetManager()
+                try:
+                    self.assertIsNotNone(manager.qpet)
+                    self.assertEqual(manager.qpet.player.root, bundled.resolve())
+                finally:
+                    manager.interaction_timer.stop()
+                    manager.companion_timer.stop()
+                    manager.dragon.close()
+                    manager.qpet.close()
+
+    def test_user_assets_take_precedence_over_bundled(self):
+        bundled = Path(self.temp.name) / 'bundled'
+        bundled.mkdir()
+        with mock.patch.object(import_bailong, 'bundled_destination', return_value=bundled):
+            manager = codex_pet.PetManager()
+        try:
+            self.assertEqual(manager.qpet.player.root, (Path(self.temp.name) / 'bailong').resolve())
+        finally:
+            manager.interaction_timer.stop()
+            manager.companion_timer.stop()
+            manager.dragon.close()
+            manager.qpet.close()
 
     def test_wayland_drag_does_not_overwrite_previous_x11_position(self):
         manager = self.manager
