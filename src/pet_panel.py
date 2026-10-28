@@ -6,7 +6,7 @@ from pathlib import Path
 
 from PyQt5 import sip
 from PyQt5.QtCore import QObject, Qt, QTimer, QUrl, pyqtSignal
-from PyQt5.QtGui import QColor, QDesktopServices, QPainter, QPen, QPixmap, QTextCursor, QTextOption
+from PyQt5.QtGui import QColor, QDesktopServices, QFontDatabase, QPainter, QPen, QPixmap, QTextCharFormat, QTextCursor, QTextDocument, QTextFormat, QTextOption
 from PyQt5.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QInputDialog,
     QFrame, QLabel, QLineEdit, QListWidget, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QStackedWidget, QTabWidget, QTextEdit,
@@ -14,6 +14,15 @@ from PyQt5.QtWidgets import (
 )
 
 from codex_backend import Backend, MAX_IMAGE_BYTES, MAX_IMAGE_COUNT, MAX_IMAGE_TOTAL_BYTES
+
+
+def _same_directory(left, right):
+    if not isinstance(left, str) or not left or not isinstance(right, str) or not right:
+        return False
+    try:
+        return Path(left).expanduser().resolve() == Path(right).expanduser().resolve()
+    except (OSError, RuntimeError, ValueError):
+        return False
 
 
 STYLE = """
@@ -80,36 +89,114 @@ class StatusLabel(QLabel):
         self.setToolTip(text)
 
 
+def _markdown_features():
+    if not all(hasattr(QTextDocument, name) for name in
+               ('setMarkdown', 'MarkdownNoHTML', 'MarkdownDialectGitHub', 'MarkdownFeatures')):
+        return None
+    return QTextDocument.MarkdownFeatures(QTextDocument.MarkdownDialectGitHub | QTextDocument.MarkdownNoHTML)
+
+
+class _MessageDocument(QTextDocument):
+    """Never load images, styles or other resources from generated content."""
+
+    def loadResource(self, resource_type, url):
+        return None
+
+
 class MessageBubble(QTextEdit):
-    """Read-only, selectable text that wraps long tokens and grows with its content."""
+    """Selectable Markdown for assistants and literal text for the user."""
 
     def __init__(self, text, role):
         super().__init__()
+        self.role = role
+        self.raw_text = str(text)
         self.setObjectName('userBubble' if role == 'user' else 'assistantBubble')
         self.setReadOnly(True)
+        self.setDocument(_MessageDocument(self))
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setLineWrapMode(QTextEdit.WidgetWidth)
         self.setWordWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
         self.document().setDocumentMargin(0)
         self.document().documentLayout().documentSizeChanged.connect(self._resize_to_document)
-        self.setPlainText(text)
-        self._resize_to_document()
+        self._render_timer = QTimer(self)
+        self._render_timer.setSingleShot(True)
+        self._render_timer.setInterval(50)
+        self._render_timer.timeout.connect(self._render)
+        self._render_pending = False
+        self.selectionChanged.connect(self._selection_changed)
+        self._render()
 
     def _resize_to_document(self, size=None):
         self.setFixedHeight(max(44, math.ceil(self.document().size().height()) + 24))
 
+    def _render(self):
+        # Re-rendering a document destroys selections. Defer until the user
+        # finishes selecting or copying; incoming bytes remain in raw_text.
+        if self.textCursor().hasSelection():
+            self._render_pending = True
+            return
+        self._render_pending = False
+        document = self.document()
+        features = _markdown_features() if self.role != 'user' else None
+        if features is not None:
+            document.setMarkdown(self.raw_text, features)
+            self._style_code(document)
+        else:
+            self.setPlainText(self.raw_text)
+
+    def _style_code(self, document):
+        # Qt marks code fragments fixed-pitch but inherits the UI font family;
+        # select an actual fixed font and tint code to make it distinguishable.
+        fonts = QFontDatabase()
+        fixed_family = QFontDatabase.systemFont(QFontDatabase.FixedFont).family()
+        if not fonts.isFixedPitch(fixed_family):
+            fixed_family = next((name for name in ('DejaVu Sans Mono', 'Liberation Mono', 'Monospace')
+                                 if name in fonts.families() and fonts.isFixedPitch(name)), fixed_family)
+        spans = []
+        blocks = []
+        block = document.begin()
+        while block.isValid():
+            fenced = block.blockFormat().hasProperty(QTextFormat.BlockCodeFence)
+            if fenced:
+                blocks.append(block.position())
+            fragments = block.begin()
+            while not fragments.atEnd():
+                fragment = fragments.fragment()
+                if fragment.isValid() and (fenced or fragment.charFormat().fontFixedPitch()):
+                    spans.append((fragment.position(), fragment.length(), not fenced))
+                fragments += 1
+            block = block.next()
+        cursor = QTextCursor(document)
+        for position in blocks:
+            cursor.setPosition(position)
+            block_format = cursor.blockFormat()
+            block_format.setBackground(QColor('#e9e1f2'))
+            cursor.setBlockFormat(block_format)
+        for position, length, inline in spans:
+            cursor.setPosition(position)
+            cursor.setPosition(position + length, QTextCursor.KeepAnchor)
+            char_format = QTextCharFormat()
+            char_format.setFontFamily(fixed_family)
+            if inline:
+                char_format.setBackground(QColor('#e9e1f2'))
+            cursor.mergeCharFormat(char_format)
+
+    def _selection_changed(self):
+        if self._render_pending and not self.textCursor().hasSelection():
+            self._render_timer.start()
+
     def append_text(self, text):
-        selection = self.textCursor()
-        cursor = QTextCursor(self.document())
-        cursor.movePosition(QTextCursor.End)
-        cursor.insertText(str(text))
-        self.setTextCursor(selection)
+        self.raw_text += str(text)
+        # Reparse complete accumulated text, so delimiters split across deltas
+        # form the same document as a complete response. Batch rapid deltas.
+        if not self._render_timer.isActive():
+            self._render_timer.start()
 
 
 
 class ChatTranscript(QScrollArea):
-    """Selectable plain-text bubbles with one continuously updated response."""
+    """Selectable messages with one continuously updated response."""
 
     def __init__(self):
         super().__init__()
@@ -127,6 +214,7 @@ class ChatTranscript(QScrollArea):
         self.response = None
         self.follow_latest = True
         self.scroll_restore_generation = 0
+        self.pending_messages = None
         self.verticalScrollBar().rangeChanged.connect(self._range_changed)
         self.verticalScrollBar().valueChanged.connect(self._position_changed)
         self.add_message('assistant', '你好呀，我在这里。想聊聊天，或一起处理什么事情？')
@@ -140,6 +228,7 @@ class ChatTranscript(QScrollArea):
         name = QLabel('你' if role == 'user' else '✦  CODEX')
         name.setObjectName('bubbleName')
         bubble = MessageBubble(text, role)
+        bubble.selectionChanged.connect(self._selection_changed)
         box.addWidget(name)
         box.addWidget(bubble)
         row = QHBoxLayout()
@@ -153,6 +242,7 @@ class ChatTranscript(QScrollArea):
         return bubble
 
     def start_exchange(self, text):
+        self.pending_messages = None
         self.add_message('user', text)
         self.response = self.add_message('assistant', '')
 
@@ -174,13 +264,40 @@ class ChatTranscript(QScrollArea):
         self.follow_latest = value >= self.verticalScrollBar().maximum() - 8
 
     def toPlainText(self):
-        return '\n'.join(bubble.toPlainText() for bubble in self.bubbles)
+        return '\n'.join(bubble.raw_text for bubble in self.bubbles)
+
+    def _selection_changed(self):
+        if self.pending_messages is not None:
+            # Run after the selection-change signal has finished; another refresh,
+            # conversation switch or selection can supersede it first.
+            QTimer.singleShot(0, self._apply_pending_messages)
+
+    def _apply_pending_messages(self):
+        if sip.isdeleted(self) or self.pending_messages is None or any(
+                bubble.textCursor().hasSelection() for bubble in self.bubbles):
+            return
+        messages = self.pending_messages
+        self.pending_messages = None
+        self.replace_messages_preserving_scroll(messages)
 
     def replace_messages_preserving_scroll(self, messages):
-        current = [('user' if bubble.objectName() == 'userBubble' else 'assistant', bubble.toPlainText())
+        messages = list(messages)
+        current = [('user' if bubble.objectName() == 'userBubble' else 'assistant', bubble.raw_text)
                    for bubble in self.bubbles]
         if current == messages:
+            self.pending_messages = None
             return
+        if messages[:len(current)] == current:
+            # Appending leaves existing widgets and their active selections intact.
+            self.pending_messages = None
+            for role, text in messages[len(current):]:
+                self.add_message(role, text)
+            return
+        if any(bubble.textCursor().hasSelection() for bubble in self.bubbles):
+            # Keep only the latest complete snapshot until the user finishes selecting.
+            self.pending_messages = messages
+            return
+        self.pending_messages = None
         bar = self.verticalScrollBar()
         old_value = bar.value()
         follow = old_value >= bar.maximum() - 8
@@ -202,6 +319,7 @@ class ChatTranscript(QScrollArea):
         QTimer.singleShot(0, restore)
 
     def clear(self):
+        self.pending_messages = None
         self.scroll_restore_generation += 1
         while self.messages.count() > 1:
             row = self.messages.takeAt(0).layout()
@@ -645,6 +763,8 @@ class PetPanel(QDialog):
             f'最多 {MAX_IMAGE_COUNT} 张，单张 {MAX_IMAGE_BYTES // (1024 * 1024)} MiB，'
             f'总计 {MAX_IMAGE_TOTAL_BYTES // (1024 * 1024)} MiB。')
         if hasattr(self, 'transcripts'):
+            if mode != 'task':
+                self.transcripts['task'].pending_messages = None
             self.transcript = self.transcripts[mode]
             self.transcript_stack.setCurrentWidget(self.transcript)
         self.threads_button.setVisible(mode == 'task')
@@ -985,8 +1105,8 @@ class PetPanel(QDialog):
         invalid = not isinstance(thread, dict)
         if not invalid:
             turns = thread.get('turns')
-            invalid = (thread.get('id') != self.thread_reading or not thread.get('cwd') or
-                       (refreshing and (self.selected_thread != self.thread_reading or self.cwd != thread['cwd'])) or
+            invalid = (thread.get('id') != self.thread_reading or not isinstance(thread.get('cwd'), str) or not thread.get('cwd') or
+                       (refreshing and (self.selected_thread != self.thread_reading or not _same_directory(self.cwd, thread['cwd']))) or
                        not isinstance(turns, list))
         if not invalid:
             for turn in turns:
@@ -1055,7 +1175,7 @@ class PetPanel(QDialog):
                         if tool:
                             summary += '\n' + tool
                     messages.append(('assistant', summary))
-        if self.cwd != thread['cwd']:
+        if not _same_directory(self.cwd, thread['cwd']):
             self.backend.new_thread('plan', thread['cwd'])
             self.transcripts['plan'].clear()
         transcript = self.transcripts['task']
@@ -1139,18 +1259,21 @@ class PetPanel(QDialog):
         self.progress_panel.hide()
         self.prompt.clear()
         images = list(self.images)
-        self.inflight_draft = {'mode': mode, 'cwd': self.cwd, 'text': draft_text, 'images': images}
+        self.inflight_draft = {'mode': mode, 'cwd': self.cwd, 'text': draft_text, 'images': images,
+                               'selected_thread': self.selected_thread if mode == 'task' else None}
         self.images.clear()
         self._show_images()
         names = '\n'.join(Path(path).name for path in images)
         self.transcript.start_exchange(text + ('\n\n[图片附件]\n' + names if names else ''))
         if mode in ('task', 'plan'):
             self.action_callback('work')
-        self.backend.send(mode, text, self.cwd, selected['id'],
-                          self.effort.currentData() if mode == 'task' else None,
-                          self.selected_thread if mode == 'task' else None,
-                          self.permission.currentData() if mode == 'task' and self.selected_thread else None,
-                          images or None)
+        request_id = self.backend.send(mode, text, self.cwd, selected['id'],
+                                       self.effort.currentData() if mode == 'task' else None,
+                                       self.selected_thread if mode == 'task' else None,
+                                       self.permission.currentData() if mode == 'task' and self.selected_thread else None,
+                                       images or None)
+        if self.inflight_draft is not None:
+            self.inflight_draft['request_id'] = request_id
 
     def _append(self, text):
         self.transcript.append_response(text)
@@ -1207,7 +1330,28 @@ class PetPanel(QDialog):
             bar.setValue(bar.maximum())
 
     def _event(self, event, data):
-        if event == 'models':
+        if event == 'thread':
+            draft = self.inflight_draft
+            thread = data.get('thread') if isinstance(data, dict) else None
+            if (not isinstance(data, dict) or not self.busy or self.active_mode != 'task' or not draft or draft['mode'] != 'task'
+                    or data.get('mode') != 'task' or not draft.get('request_id')
+                    or data.get('request_id') != draft['request_id'] or not isinstance(thread, dict)):
+                return
+            ident, directory = thread.get('id'), thread.get('cwd')
+            previous = draft.get('selected_thread')
+            if (not isinstance(ident, str) or not ident or not isinstance(directory, str) or not directory
+                    or self.selected_thread != previous or (previous and previous != ident)
+                    or not isinstance(self.cwd, str) or not isinstance(draft['cwd'], str)):
+                return
+            try:
+                if (Path(directory).expanduser().resolve() != Path(draft['cwd']).expanduser().resolve()
+                        or Path(self.cwd).expanduser().resolve() != Path(draft['cwd']).expanduser().resolve()):
+                    return
+            except (OSError, RuntimeError, ValueError):
+                return
+            self.selected_thread = ident
+            self._show_permission()
+        elif event == 'models':
             mode = data.get('mode')
             if mode not in self.model_generation or data.get('generation') != self.model_generation[mode]:
                 return
@@ -1450,6 +1594,14 @@ class PetPanel(QDialog):
             self.status.setText('此审批的决定选项暂不支持，已拒绝处理。')
             return
         details = json.dumps(params, ensure_ascii=False, indent=2, default=str)
+        if method == 'item/fileChange/requestApproval':
+            changes = data.get('file_changes')
+            if changes:
+                details += '\n\n文件变更详情（来自同一会话、轮次和项目）：\n'
+                for change in changes:
+                    details += '\n' + str(change['path']) + '  ' + json.dumps(change['kind'], ensure_ascii=False) + '\n' + change['diff'] + '\n'
+            else:
+                details += '\n\n文件差异不可用：未收到匹配的完整变更，或变更超过显示限制。请先在 Codex 中检查。'
         dialog = QDialog(self)
         dialog.setWindowTitle('Codex 请求审批')
         dialog.resize(600, 400)

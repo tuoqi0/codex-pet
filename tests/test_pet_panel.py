@@ -22,11 +22,15 @@ class FakeBackend:
     def __init__(self, emit):
         self.emit = emit
         self.calls = []
+        self.request_count = 0
 
     def login(self): self.calls.append(('login',))
     def account(self): self.calls.append(('account',))
     def limits(self): self.calls.append(('limits',))
-    def send(self, *args): self.calls.append(('send', *args))
+    def send(self, *args):
+        self.calls.append(('send', *args))
+        self.request_count += 1
+        return str(self.request_count)
     def models(self, mode, generation=None): self.calls.append(('models', mode, generation))
     def codex_threads(self, cursor=None): self.calls.append(('codex_threads', cursor))
     def codex_thread(self, thread_id): self.calls.append(('codex_thread', thread_id))
@@ -94,6 +98,43 @@ class PanelTests(unittest.TestCase):
         self.panel._approval({'id': 3, 'method': 'item/commandExecution/requestApproval',
                               'params': {'availableDecisions': ['accept']}})
         self.assertEqual(self.panel.backend.calls[-1], ('approve', 3, 'unsupported'))
+
+    def test_file_approval_displays_matched_diff_or_unavailable_reason(self):
+        from PyQt5.QtWidgets import QPlainTextEdit
+        observed = []
+        def reject():
+            dialog = QApplication.activeModalWidget()
+            observed.append(dialog.findChild(QPlainTextEdit).toPlainText())
+            dialog.reject()
+        changes = [{'path': 'app.py', 'kind': {'type': 'update'}, 'diff': '-old\n+new'}]
+        QTimer.singleShot(0, reject)
+        self.panel._approval({'id': 10, 'method': 'item/fileChange/requestApproval',
+                              'params': {'threadId': 't', 'turnId': 'r', 'itemId': 'i'}, 'file_changes': changes})
+        self.assertIn('app.py', observed[-1])
+        self.assertIn('-old\n+new', observed[-1])
+        self.assertEqual(self.panel.backend.calls[-1], ('approve', 10, 'decline'))
+        QTimer.singleShot(0, reject)
+        self.panel._approval({'id': 11, 'method': 'item/fileChange/requestApproval', 'params': {}})
+        self.assertIn('文件差异不可用', observed[-1])
+        self.assertEqual(self.panel.backend.calls[-1], ('approve', 11, 'decline'))
+
+    def test_switching_modes_cancels_deferred_old_history(self):
+        from PyQt5.QtGui import QTextCursor
+        self.panel.mode.setCurrentIndex(2)
+        transcript = self.panel.transcripts['task']
+        transcript.clear()
+        old = transcript.add_message('assistant', '选中的任务消息')
+        cursor = old.textCursor()
+        cursor.select(QTextCursor.Document)
+        old.setTextCursor(cursor)
+        transcript.replace_messages_preserving_scroll([('assistant', '旧的延迟刷新')])
+        self.assertIsNotNone(transcript.pending_messages)
+        self.panel.mode.setCurrentIndex(0)
+        cursor.clearSelection()
+        old.setTextCursor(cursor)
+        QTest.qWait(20)
+        self.assertIn('选中的任务消息', transcript.toPlainText())
+        self.assertNotIn('旧的延迟刷新', transcript.toPlainText())
 
     def test_refresh_selected_thread_preserves_draft_and_permissions(self):
         self.panel.mode.setCurrentIndex(2)
@@ -345,6 +386,96 @@ class PanelTests(unittest.TestCase):
         self.panel.bridge.received.emit('done', {'mode': 'task', 'status': 'completed'})
         self.assertEqual(self.actions[-1], 'celebrate')
 
+    def test_automatic_follow_accepts_symlinked_work_directory_and_keeps_plan(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'real').mkdir()
+            (root / 'alias').symlink_to(root / 'real', target_is_directory=True)
+            self.panel.mode.setCurrentIndex(2)
+            self.panel.cwd = str(root / 'alias')
+            self.panel.show()
+            self.panel.transcripts['plan'].add_message('assistant', '保留计划')
+            self.panel.prompt.setPlainText('检查')
+            self.panel._send()
+            request_id = self.panel.inflight_draft['request_id']
+            self.panel.bridge.received.emit('thread', {'mode': 'task', 'request_id': request_id,
+                                            'thread': {'id': 'new', 'cwd': str(root / 'real')}})
+            self.panel.bridge.received.emit('done', {'mode': 'task', 'status': 'completed'})
+            self.panel._follow_thread_tick()
+            self.panel.bridge.received.emit('codex_thread', {'thread': {'id': 'new', 'cwd': str(root / 'real'),
+                'turns': [{'items': [{'type': 'agentMessage', 'text': '更新'}]}]}})
+            self.assertFalse(self.panel.thread_follow_failed)
+            self.assertIn('更新', self.panel.transcripts['task'].toPlainText())
+            self.assertIn('保留计划', self.panel.transcripts['plan'].toPlainText())
+            self.assertNotIn(('new_thread', 'plan', str(root / 'real')), self.panel.backend.calls)
+
+    def test_new_task_follows_its_thread_after_completion_without_changing_permissions(self):
+        self.panel.mode.setCurrentIndex(2)
+        self.panel.cwd = '/tmp'
+        self.panel.show()
+        self.panel.permission.setCurrentIndex(0)
+        self.panel.prompt.setPlainText('检查')
+        self.panel._send()
+        request_id = self.panel.inflight_draft['request_id']
+        self.panel.bridge.received.emit('thread', {'mode': 'task', 'request_id': request_id,
+                                         'thread': {'id': 'new-task', 'cwd': '/tmp'}})
+        self.assertEqual(self.panel.selected_thread, 'new-task')
+        self.assertIsNone(self.panel.permission.currentData())
+        self.panel.bridge.received.emit('done', {'mode': 'task', 'status': 'completed'})
+        self.panel._follow_thread_tick()
+        self.assertEqual(self.panel.backend.calls[-1], ('codex_thread', 'new-task'))
+
+    def test_thread_event_rejects_stale_request_wrong_mode_cwd_or_user_selection(self):
+        self.panel.mode.setCurrentIndex(2)
+        self.panel.cwd = '/tmp'
+        self.panel.prompt.setPlainText('检查')
+        self.panel._send()
+        ident = self.panel.inflight_draft['request_id']
+        event = {'mode': 'task', 'request_id': ident, 'thread': {'id': 'new-task', 'cwd': '/tmp'}}
+        for altered in (None, {**event, 'request_id': 'old'}, {**event, 'mode': 'plan'},
+                        {**event, 'thread': {'id': 'new-task', 'cwd': '/'}},
+                        {**event, 'thread': {'id': '', 'cwd': '/tmp'}},
+                        {**event, 'thread': {'id': 'new-task'}}):
+            self.panel.bridge.received.emit('thread', altered)
+            self.assertIsNone(self.panel.selected_thread)
+        self.panel.selected_thread = 'manually-selected'
+        self.panel.bridge.received.emit('thread', event)
+        self.assertEqual(self.panel.selected_thread, 'manually-selected')
+        self.panel.selected_thread = None
+        self.panel.cwd = '/'
+        self.panel.bridge.received.emit('thread', event)
+        self.assertIsNone(self.panel.selected_thread)
+        self.panel.cwd = '/tmp'
+        self.panel.bridge.received.emit('done', {'mode': 'task', 'status': 'completed'})
+        self.panel.bridge.received.emit('thread', event)
+        self.assertIsNone(self.panel.selected_thread)
+
+    def test_background_task_thread_event_is_correlated_before_auto_follow(self):
+        from codex_backend import Backend
+        class SyntheticBackend(Backend):
+            def _agent(self, mode, text, cwd, *args, request_id=None, **kwargs):
+                self.emit('thread', {'mode': mode, 'request_id': request_id,
+                                     'thread': {'id': 'new-background', 'cwd': cwd}})
+                return 'completed'
+        panel = PetPanel(backend_factory=lambda emit: SyntheticBackend(emit, auth=object()))
+        panel.model_cache = {'task': [{'id': 'model', 'name': 'Model'}]}
+        panel.mode.setCurrentIndex(2)
+        panel.cwd = '/tmp'
+        panel.show()
+        panel.prompt.setPlainText('检查')
+        panel._send()
+        for _ in range(30):
+            self.app.processEvents()
+            if not panel.busy:
+                break
+            QTest.qWait(10)
+        self.assertFalse(panel.busy)
+        self.assertEqual(panel.selected_thread, 'new-background')
+        self.assertIsNone(panel.permission.currentData())
+        panel.backend.close()
+        panel.hide()
+        panel.deleteLater()
+
     def test_bubbles_preserve_plain_text_stream_and_scroll(self):
         self.panel.resize(500, 580)
         self.panel.show()
@@ -355,7 +486,7 @@ class PanelTests(unittest.TestCase):
         QTest.qWait(100)
         transcript = self.panel.transcript
         self.assertEqual(transcript.bubbles[-2].toPlainText(), '<b>普通文字</b>')
-        self.assertTrue(transcript.bubbles[-1].toPlainText().startswith('第一段\n'))
+        self.assertTrue(transcript.bubbles[-1].raw_text.startswith('第一段\n'))
         self.assertGreater(transcript.verticalScrollBar().maximum(), 0)
         self.assertEqual(transcript.verticalScrollBar().value(), transcript.verticalScrollBar().maximum())
         self.panel.bridge.received.emit('delta', '結尾' * 300)

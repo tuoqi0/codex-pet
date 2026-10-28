@@ -536,6 +536,68 @@ for line in sys.stdin:
         self.assertNotIn('developerInstructions', requests['thread/resume'])
         self.assertEqual(b.threads[('task', directory)], 'selected')
 
+    def test_started_task_emits_its_send_request_id(self):
+        done = threading.Event()
+        events = []
+        class Server:
+            def __init__(self, *args, **kwargs):
+                self.completed_turns = {}
+            def request(self, method, params):
+                if method == 'account/read':
+                    return {'account': {'type': 'chatgpt'}}
+                if method == 'thread/start':
+                    return {'thread': {'id': 'new', 'cwd': directory}}
+                if method == 'turn/start':
+                    self.completed_turns['turn'] = {'id': 'turn', 'status': 'completed'}
+                    return {'turn': {'id': 'turn'}}
+                raise AssertionError(method)
+            def close(self): pass
+        def emit(kind, data):
+            events.append((kind, data))
+            if kind == 'done': done.set()
+        b = backend.Backend(emit, auth=FakeAuth())
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(backend, 'AppServer', Server):
+            request_id = b.send('task', 'hello', directory, model='model')
+            self.assertTrue(done.wait(2), events)
+            thread = next(data for kind, data in events if kind == 'thread')
+            self.assertEqual(thread['request_id'], request_id)
+            self.assertEqual(thread['thread'], {'id': 'new', 'cwd': directory})
+            self.assertEqual(thread['mode'], 'task')
+
+    def test_own_created_task_can_resume_default_effort_with_explicit_permission(self):
+        calls = []
+        class Server:
+            def __init__(self, *args, **kwargs): self.completed_turns = {}
+            def request(self, method, params):
+                calls.append((method, params))
+                if method == 'account/read': return {'account': {'type': 'chatgpt'}}
+                if method == 'thread/start':
+                    return {'thread': {'id': 'new', 'cwd': directory}, 'model': 'm', 'reasoningEffort': None}
+                if method == 'thread/read':
+                    return {'thread': {'id': 'new', 'cwd': directory, 'modelProvider': 'openai',
+                                       'model': 'm', 'reasoningEffort': None}}
+                if method == 'thread/resume':
+                    return {'thread': {'id': 'new', 'cwd': directory}, 'model': 'm', 'reasoningEffort': None,
+                            'sandbox': {'type': 'readOnly'}, 'approvalPolicy': 'on-request'}
+                if method == 'turn/start':
+                    self.completed_turns['turn'] = {'id': 'turn', 'status': 'completed'}
+                    return {'turn': {'id': 'turn'}}
+                raise AssertionError(method)
+            def close(self): pass
+        b = backend.Backend(lambda *_: None, auth=FakeAuth())
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(backend, 'AppServer', Server):
+            self.assertEqual(b._agent('task', 'first', directory, model='m'), 'completed')
+            self.assertEqual(b._agent('task', 'follow', directory, model='m', thread_id='new',
+                                      task_sandbox='read-only'), 'completed')
+            resume = next(params for method, params in calls if method == 'thread/resume')
+            self.assertEqual(resume['sandbox'], 'read-only')
+            self.assertEqual(resume['approvalPolicy'], 'on-request')
+            turns = [params for method, params in calls if method == 'turn/start']
+            self.assertNotIn('effort', turns[-1])
+            b.new_thread('task', directory)
+            with self.assertRaisesRegex(RuntimeError, '历史对话未提供原推理强度'):
+                b._agent('task', 'external', directory, model='m', thread_id='new', task_sandbox='read-only')
+
     def test_history_resume_requires_explicit_permission_and_confirmation(self):
         calls = []
         class Server:
@@ -768,6 +830,54 @@ for line in sys.stdin:
         server.handle({'id': 4, 'method': 'item/commandExecution/requestApproval',
                        'params': {'availableDecisions': ['accept']}})
         self.assertIn('error', sent[-1])
+
+    def test_file_approval_uses_only_matching_current_patch_and_bounded_cache(self):
+        events = []
+        server = object.__new__(backend.AppServer)
+        server.emit = lambda *x: events.append(x)
+        server.pending_approvals = {}
+        server.completed_turns = {}
+        server.mode = 'task'
+        ids = {'threadId': 'thread-a', 'turnId': 'turn-a', 'itemId': 'item-a'}
+        change = {'path': 'a.py', 'kind': {'type': 'update'}, 'diff': '-before\n+after'}
+        server.handle({'method': 'item/started', 'params': {
+            'threadId': ids['threadId'], 'turnId': ids['turnId'],
+            'item': {'id': ids['itemId'], 'type': 'fileChange', 'changes': [change]}}})
+        server.handle({'id': 1, 'method': 'item/fileChange/requestApproval', 'params': ids})
+        self.assertEqual(events[-1][1]['file_changes'], [change])
+        for key in ids:
+            mismatched = dict(ids, **{key: 'other'})
+            server.handle({'id': 2, 'method': 'item/fileChange/requestApproval', 'params': mismatched})
+            self.assertIsNone(events[-1][1]['file_changes'])
+        for key in ids:
+            missing = dict(ids)
+            del missing[key]
+            server.handle({'id': 2, 'method': 'item/fileChange/requestApproval', 'params': missing})
+            self.assertIsNone(events[-1][1]['file_changes'])
+        updated = dict(change, diff='-before\n+updated')
+        server.handle({'method': 'item/fileChange/patchUpdated', 'params': dict(ids, changes=[updated])})
+        server.handle({'id': 3, 'method': 'item/fileChange/requestApproval', 'params': ids})
+        self.assertEqual(events[-1][1]['file_changes'], [updated])
+        sent = []
+        server.write = sent.append
+        server.approve(1, 'accept')
+        self.assertEqual(sent[-1]['result']['decision'], 'decline')
+        self.assertIn('审批期间', events[-1][1])
+        oversized = dict(change, diff='x' * (backend.MAX_APPROVAL_PATCH_CHARS + 1))
+        server.handle({'method': 'item/fileChange/patchUpdated', 'params': dict(ids, changes=[oversized])})
+        server.handle({'id': 4, 'method': 'item/fileChange/requestApproval', 'params': ids})
+        self.assertIsNone(events[-1][1]['file_changes'])
+        server.handle({'method': 'item/fileChange/patchUpdated', 'params': dict(ids, changes=[change])})
+        server.handle({'method': 'item/completed', 'params': {'threadId': ids['threadId'], 'turnId': ids['turnId'],
+                      'item': {'id': ids['itemId'], 'type': 'fileChange', 'changes': [change]}}})
+        server.handle({'id': 5, 'method': 'item/fileChange/requestApproval', 'params': ids})
+        self.assertIsNone(events[-1][1]['file_changes'])
+        for i in range(backend.MAX_APPROVAL_PATCH_ITEMS + 1):
+            server._remember_patch(('thread-a', 'turn-a', str(i)), [change])
+        self.assertEqual(len(server.file_change_patches), backend.MAX_APPROVAL_PATCH_ITEMS)
+        self.assertNotIn(('thread-a', 'turn-a', '0'), server.file_change_patches)
+        server.handle({'method': 'turn/completed', 'params': {'threadId': 'thread-a', 'turn': {'id': 'turn-a'}}})
+        self.assertFalse(server.file_change_patches)
 
     def test_progress_keeps_plan_and_tool_lifecycle_without_private_outputs(self):
         events = []

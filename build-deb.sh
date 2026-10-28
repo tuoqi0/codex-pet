@@ -12,7 +12,7 @@ mkdir -p "$stage/DEBIAN" "$stage/usr/bin" "$stage/usr/share/codex-pet" \
     "$stage/usr/share/applications" "$stage/usr/share/pixmaps"
 cat > "$stage/DEBIAN/control" <<'EOF'
 Package: codex-pet
-Version: 2.11.0
+Version: 2.12.0
 Section: utils
 Priority: optional
 Architecture: all
@@ -40,4 +40,4 @@ exec /usr/bin/python3 /usr/share/codex-pet/import_bailong.py "$@"
 EOF
 chmod 755 "$stage/usr/bin/codex-pet-import"
 install -m 644 "$base/packaging/codex-pet.desktop" "$stage/usr/share/applications/"
-dpkg-deb --build --root-owner-group "$stage" "$out/codex-pet_2.11.0_all.deb"
+dpkg-deb --build --root-owner-group "$stage" "$out/codex-pet_2.12.0_all.deb"

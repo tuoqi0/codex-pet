@@ -4,6 +4,7 @@ The callback receives (event, data) on a worker thread; UI must marshal it to
 its event loop. Only official ChatGPT OAuth and Codex app-server are used.
 """
 import json
+from collections import OrderedDict
 import base64
 import io
 import os
@@ -16,6 +17,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import uuid
 
 import requests
 from PIL import Image, UnidentifiedImageError
@@ -31,6 +33,8 @@ IMAGE_FORMATS = {'PNG': ('image/png', '.png'), 'JPEG': ('image/jpeg', '.jpg'),
 
 STOP_TIMEOUT_SECONDS = 8
 MAX_HISTORY_PAGES = 100
+MAX_APPROVAL_PATCH_ITEMS = 16
+MAX_APPROVAL_PATCH_CHARS = 256_000
 
 CHATGPT_ERROR_HINTS = {
     'subscription_sharing_user_not_eligible': '当前账户、工作空间或策略不允许使用 ChatGPT 计划。',
@@ -212,13 +216,16 @@ class AppServer:
         self.write_lock = threading.Lock()
         self.counter = 0
         self.pending_approvals = {}
+        self.file_change_patches = OrderedDict()
+        self.pending_patch_snapshots = {}
+        self.event_lock = threading.RLock()
         self.completed_turns = {}
         self.mode = None
         threading.Thread(target=self._read, daemon=True).start()
         try:
             if on_spawn is not None:
                 on_spawn(self.process)
-            self.request('initialize', {'clientInfo': {'name': 'codex_pet', 'title': 'Codex Pet', 'version': '2.11.0'}, 'capabilities': {'experimentalApi': True}})
+            self.request('initialize', {'clientInfo': {'name': 'codex_pet', 'title': 'Codex Pet', 'version': '2.12.0'}, 'capabilities': {'experimentalApi': True}})
             self.write({'method': 'initialized', 'params': {}})
         except Exception:
             self.close()
@@ -283,7 +290,56 @@ class AppServer:
             raise RuntimeError('Codex App Server 已退出。')
         return event
 
+    @staticmethod
+    def _patch_key(params, item_id=None):
+        key = (params.get('threadId'), params.get('turnId'), item_id if item_id is not None else params.get('itemId'))
+        return key if all(isinstance(value, str) and value for value in key) else None
+
+    def _remember_patch(self, key, changes):
+        if key is None:
+            return
+        # Invalid or oversized changes are marked unavailable, never partially presented as complete.
+        checked = []
+        size = 0
+        if isinstance(changes, list) and 0 < len(changes) <= 1000:
+            for change in changes:
+                if not isinstance(change, dict) or not isinstance(change.get('path'), str) or not isinstance(change.get('diff'), str):
+                    checked = None
+                    break
+                kind = change.get('kind')
+                if not isinstance(kind, dict) or kind.get('type') not in ('add', 'delete', 'update'):
+                    checked = None
+                    break
+                move_path = kind.get('move_path')
+                if move_path is not None and not isinstance(move_path, str):
+                    checked = None
+                    break
+                size += len(change['path']) + len(change['diff']) + len(move_path or '') + 16
+                if size > MAX_APPROVAL_PATCH_CHARS:
+                    checked = None
+                    break
+                safe_kind = {'type': kind['type']}
+                if move_path is not None:
+                    safe_kind['move_path'] = move_path
+                checked.append({'path': change['path'], 'kind': safe_kind, 'diff': change['diff']})
+        else:
+            checked = None
+        patches = getattr(self, 'file_change_patches', None)
+        if patches is None:
+            patches = self.file_change_patches = OrderedDict()
+        patches[key] = checked
+        patches.move_to_end(key)
+        while len(patches) > MAX_APPROVAL_PATCH_ITEMS:
+            patches.popitem(last=False)
+
     def handle(self, event):
+        lock = getattr(self, 'event_lock', None)
+        if lock is None:  # Isolated unit test instances do not start a server.
+            lock = self.event_lock = threading.RLock()
+        with lock:
+            return self._handle(event)
+
+    def _handle(self, event):
         method = event.get('method', '')
         params = event.get('params') or {}
         if 'id' in event and method:
@@ -301,7 +357,15 @@ class AppServer:
                         self.write({'id': request_id, 'result': result})
                 else:
                     self.pending_approvals[request_id] = (method, params)
-                    self.emit('approval', {'id': request_id, 'method': method, 'params': params})
+                    payload = {'id': request_id, 'method': method, 'params': params}
+                    if method == 'item/fileChange/requestApproval':
+                        key = self._patch_key(params)
+                        payload['file_changes'] = getattr(self, 'file_change_patches', {}).get(key)
+                        snapshots = getattr(self, 'pending_patch_snapshots', None)
+                        if snapshots is None:
+                            snapshots = self.pending_patch_snapshots = {}
+                        snapshots[request_id] = payload['file_changes']
+                    self.emit('approval', payload)
             else:
                 # Do not guess response shapes or grant unknown requests.
                 self.write({'id': request_id, 'error': {'code': -32601, 'message': 'Unsupported request'}})
@@ -309,6 +373,15 @@ class AppServer:
         elif method == 'turn/completed':
             turn = params.get('turn', {})
             self.completed_turns[turn.get('id')] = turn
+            thread_id, turn_id = params.get('threadId'), turn.get('id')
+            patches = getattr(self, 'file_change_patches', {})
+            for key in list(patches):
+                if key[:2] == (thread_id, turn_id):
+                    del patches[key]
+        elif method == 'item/fileChange/patchUpdated':
+            key = self._patch_key(params)
+            if key in getattr(self, 'file_change_patches', {}):
+                self._remember_patch(key, params.get('changes'))
         elif method == 'item/agentMessage/delta':
             self.emit('delta', params.get('delta', ''))
         elif method == 'item/plan/delta':
@@ -325,6 +398,12 @@ class AppServer:
         elif method in ('item/started', 'item/completed'):
             item = params.get('item', {})
             kind = item.get('type', '')
+            if kind == 'fileChange':
+                key = self._patch_key(params, item.get('id'))
+                if method == 'item/started':
+                    self._remember_patch(key, item.get('changes'))
+                else:
+                    getattr(self, 'file_change_patches', {}).pop(key, None)
             if kind == 'plan' and method == 'item/completed':
                 self.emit('progress', {'kind': 'plan_final', 'item_id': item.get('id'),
                                        'text': item.get('text', '')})
@@ -353,9 +432,26 @@ class AppServer:
         self.events.put({'_pet_wake': True})
 
     def approve(self, request_id, decision):
+        lock = getattr(self, 'event_lock', None)
+        if lock is None:
+            lock = self.event_lock = threading.RLock()
+        with lock:
+            return self._approve(request_id, decision)
+
+    def _approve(self, request_id, decision):
         if request_id not in self.pending_approvals:
             raise RuntimeError('审批请求已失效。')
         method, params = self.pending_approvals[request_id]
+        if method == 'item/fileChange/requestApproval' and decision == 'accept':
+            snapshots = getattr(self, 'pending_patch_snapshots', {})
+            snapshot = snapshots.get(request_id)
+            current = getattr(self, 'file_change_patches', {}).get(self._patch_key(params))
+            if snapshot != current:
+                self.write({'id': request_id, 'result': {'decision': 'decline'}})
+                del self.pending_approvals[request_id]
+                snapshots.pop(request_id, None)
+                self.emit('error', '审批期间文件变更内容发生变化，已拒绝；请重新检查。')
+                return
         if method == 'item/tool/requestUserInput':
             if decision == 'cancel':
                 payload = {'id': request_id, 'error': {'code': -32800, 'message': 'User cancelled'}}
@@ -386,6 +482,7 @@ class AppServer:
                 payload = {'id': request_id, 'result': {'decision': decision}}
         self.write(payload)
         del self.pending_approvals[request_id]
+        getattr(self, 'pending_patch_snapshots', {}).pop(request_id, None)
 
     def close(self):
         if self.process.poll() is None:
@@ -421,6 +518,9 @@ class Backend:
         self.history = []
         self.history_image_bytes = 0
         self.threads = {}
+        # Only threads started by this backend instance can use its original
+        # default reasoning semantics. Selected external history stays strict.
+        self.created_threads = {}
 
     def _async(self, operation, error_event='error'):
         def run():
@@ -627,7 +727,9 @@ class Backend:
     def new_thread(self, mode, cwd):
         """Forget the active local mapping; existing Codex history is retained."""
         if mode in ('plan', 'task') and cwd:
-            self.threads.pop((mode, str(Path(cwd).expanduser().resolve())), None)
+            key = (mode, str(Path(cwd).expanduser().resolve()))
+            self.threads.pop(key, None)
+            self.created_threads.pop(key, None)
         elif mode == 'chat':
             self.history = []
             self.history_image_bytes = 0
@@ -648,6 +750,7 @@ class Backend:
                 return
             self.active = 'starting'
             self.cancelled.clear()
+        request_id = uuid.uuid4().hex
         def run():
             status = 'failed'
             try:
@@ -661,7 +764,8 @@ class Backend:
                     self._chat(text, model, loaded_images)
                     status = 'interrupted' if self.cancelled.is_set() else 'completed'
                 else:
-                    status = self._agent(mode, text, cwd, model, effort, thread_id, task_sandbox, loaded_images)
+                    status = self._agent(mode, text, cwd, model, effort, thread_id, task_sandbox, loaded_images,
+                                         request_id=request_id)
             except CancelledBeforeTurn:
                 status = 'interrupted'
             except TurnStateUnknown as exc:
@@ -684,6 +788,7 @@ class Backend:
                 return
             self.worker = worker
             worker.start()
+        return request_id
 
     def _chat(self, text, model=None, images=()):
         token = self.auth.token()
@@ -752,7 +857,8 @@ class Backend:
         self.history = inputs + [{'role': 'assistant', 'content': ''.join(answer)}]
         self.history_image_bytes += sum(len(data) for _, _, data in images)
 
-    def _agent(self, mode, text, cwd, model=None, effort=None, thread_id=None, task_sandbox=None, images=()):
+    def _agent(self, mode, text, cwd, model=None, effort=None, thread_id=None, task_sandbox=None, images=(),
+               request_id=None):
         if thread_id and task_sandbox not in ('read-only', 'workspace-write'):
             raise RuntimeError('无法可靠继承历史会话的原有权限，请明确选择本次运行的只读或工作区写入权限。')
         directory = Path(cwd).expanduser().resolve()
@@ -797,7 +903,8 @@ class Backend:
                     raise RuntimeError('无法确认所选历史使用 OpenAI 模型提供商；不会静默切换。')
                 if model is None and not selected.get('model'):
                     raise RuntimeError('历史对话未提供原模型，无法确认是否保留；请明确选择模型。')
-                if effort is None and not selected.get('reasoningEffort'):
+                own_thread = self.created_threads.get(key) == thread_id
+                if effort is None and not selected.get('reasoningEffort') and not own_thread:
                     raise RuntimeError('历史对话未提供原推理强度，无法确认是否保留；请明确选择推理强度。')
                 params['sandbox'] = task_sandbox
                 started = server.request('thread/resume', {'threadId': thread_id, **params})
@@ -806,7 +913,8 @@ class Backend:
                     raise RuntimeError('Codex 未确认所选沙箱和审批策略；未启动任务。')
                 if model is None and started.get('model') != selected['model']:
                     raise RuntimeError('Codex 恢复的模型与历史模型不一致；请明确选择模型。')
-                if effort is None and started.get('reasoningEffort') != selected['reasoningEffort']:
+                if (effort is None and selected.get('reasoningEffort')
+                        and started.get('reasoningEffort') != selected['reasoningEffort']):
                     raise RuntimeError('Codex 恢复的推理强度与历史不一致；请明确选择推理强度。')
                 self.threads[key] = started['thread']['id']
             elif key in self.threads:
@@ -814,8 +922,9 @@ class Backend:
             else:
                 started = server.request('thread/start', params)
                 self.threads[key] = started['thread']['id']
+                self.created_threads[key] = started['thread']['id']
             thread = started['thread']
-            self.emit('thread', {'mode': mode, 'thread': thread})
+            self.emit('thread', {'mode': mode, 'thread': thread, 'request_id': request_id})
             if images and mode == 'task':
                 selected_model = model or started.get('model')
                 cursor = None
