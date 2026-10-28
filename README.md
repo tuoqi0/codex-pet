@@ -4,10 +4,10 @@ Codex Pet 是一款桌面伙伴，包含原创龙娘和可选的 Q 版白龙。�
 
 ## 安装或升级
 
-运行 `./build-deb.sh` 构建，然后安装生成的包。例如，若生成的版本是 2.23.0：
+运行 `./build-deb.sh` 构建，然后安装生成的包。例如，若生成的版本是 2.24.0：
 
 ```sh
-sudo apt install ./dist/codex-pet_2.23.0_all.deb
+sudo apt install ./dist/codex-pet_2.24.0_all.deb
 ```
 
 安装其他版本时，请将命令中的文件名改为 `dist` 目录中实际生成的文件名。启动新版前，请通过旧桌宠的右键菜单退出旧进程，然后从应用菜单打开 **Codex Pet**，或在终端运行 `codex-pet`。安装包依赖 PyQt5、Pillow、Requests、PyJWT 和 cryptography，由 apt 安装这些依赖。
@@ -49,7 +49,7 @@ codex-pet-import ./codex-pet.tar.xz
 
 通过 **图片**可以为一条消息附加最多四张用户明确选取的静态 PNG、JPEG、WebP 或 GIF 图片。单张图片上限为 10 MiB，每次请求总上限为 20 MiB。只有提交消息时才会上传图片，所选模型和账户必须支持图片输入。普通对话将当前对话和图片保留在内存中，并在后续请求中再次发送，直到开始新对话或退出应用。计划和任务使用私有临时图片副本，请求结束后删除。
 
-三种渠道均使用 ChatGPT 计划访问，不会静默切换到 API key。计划用量可能与 Codex 或应用限制共享；购买的 ChatGPT 点数是否适用取决于账户设置。Codex 额度只在 App Server 返回时显示；用量设置链接会打开 ChatGPT 的设置页面。授权计划渠道受 OpenAI 的资格和预览限制约束，授权不提供 ChatGPT 对话历史。
+三种渠道均使用 ChatGPT 计划访问，不会静默切换到个人 API key。普通对话和计划通过 Sign in with ChatGPT 的套餐授权发送合资格请求，其用量计入与 ChatGPT Work、Codex 共享的套餐用量，并受账户和应用限额约束；应用限额是上限，不是独立额度。套餐用量耗尽后，能否使用已购买的 ChatGPT 点数取决于账户资格、应用限额及用户是否允许应用使用点数等设置，具体以 ChatGPT 设置为准。请参阅 [OpenAI 的 Sign in with ChatGPT 用量说明](https://learn.chatgpt.com/docs/sign-in-with-chatgpt)。任务使用已登录 Codex 账户的套餐用量；Codex 额度只在 App Server 返回时显示，用量设置链接会打开 ChatGPT 的设置页面。授权计划渠道受 OpenAI 的资格和预览限制约束，授权不提供 ChatGPT 对话历史。
 
 ## VS Code 侧栏开场
 

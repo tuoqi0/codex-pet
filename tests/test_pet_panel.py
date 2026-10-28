@@ -816,6 +816,24 @@ class PanelTests(unittest.TestCase):
         self.panel._send()
         self.assertIsNone(self.panel.backend.calls[-1][-1])
 
+    def test_chat_and_plan_disclose_shared_usage_in_fixed_controls(self):
+        self.panel.resize(480, 580)
+        self.panel.show()
+        self.app.processEvents()
+        for mode in ('chat', 'plan'):
+            self.panel.mode.setCurrentIndex(self.panel.mode.findData(mode))
+            self.app.processEvents()
+            notice = self.panel.plan_usage_notice
+            self.assertTrue(notice.isVisible())
+            self.assertIn('Work / Codex 共享', notice.text())
+            self.assertIn('不使用个人 API key', notice.text())
+            self.assertFalse(self.panel.options_scroll.isAncestorOf(notice))
+            self.assertTrue(self.panel.rect().contains(notice.mapTo(self.panel, notice.rect().bottomRight())))
+            self.assertGreaterEqual(self.panel.transcript.height(), 120)
+        self.panel.mode.setCurrentIndex(self.panel.mode.findData('task'))
+        self.app.processEvents()
+        self.assertFalse(self.panel.plan_usage_notice.isVisible())
+
     def test_image_context_disclosure_changes_with_mode(self):
         self.assertIn('后续请求会再次传送', self.panel.notice.text())
         self.assertIn('后续请求再次传送', self.panel.upload_hint.text())

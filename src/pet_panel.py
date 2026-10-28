@@ -516,6 +516,10 @@ class PetPanel(QDialog):
         self.model_refresh.clicked.connect(self._refresh_models)
         options.addWidget(self.model_refresh)
         card_layout.addLayout(options)
+        self.plan_usage_notice = QLabel('ChatGPT 授权用量与 Work / Codex 共享，不使用个人 API key。')
+        self.plan_usage_notice.setObjectName('notice')
+        self.plan_usage_notice.setWordWrap(True)
+        card_layout.addWidget(self.plan_usage_notice)
         # Keep mode and model visible while the remaining settings scroll.
         fixed_layout = card_layout
         detail = QWidget()
@@ -788,9 +792,10 @@ class PetPanel(QDialog):
             self.mode.blockSignals(False)
             self.status.setText('正在执行，请先停止或等待完成再切换模式。')
             return
+        self.plan_usage_notice.setVisible(mode in ('chat', 'plan'))
         notices = {
             'chat': '普通对话使用 ChatGPT 授权，无本地工具。图片加入上下文后，后续请求会再次传送，直至新对话。',
-            'plan': '计划使用 ChatGPT 授权及只读工作目录；用量可能与 Codex 共享。',
+            'plan': '计划使用 ChatGPT 授权及只读工作目录。',
             'task': '使用已登录的 Codex 账户，可执行工具并请求审批。',
         }
         self.notice.setText(notices[mode] + ' 各模式上下文独立，不同步 ChatGPT 网站对话。')
