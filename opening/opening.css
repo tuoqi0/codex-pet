@@ -20,3 +20,5 @@
 @keyframes cp-sweep{0%{opacity:0;left:-40%}15%{opacity:.8}80%{opacity:.7}100%{opacity:0;left:120%}}
 @keyframes cp-spark{0%{opacity:0;transform:translateY(24px) scale(.4)}35%{opacity:1;transform:translateY(0) scale(1)}100%{opacity:.15;transform:translateY(-18px) scale(.5)}}
 @media (prefers-reduced-motion:reduce){#codex-pet-opening .cp-beam,#codex-pet-opening .cp-sparks i{animation:none;display:none}#codex-pet-opening{transition:none}}
+
+#codex-pet-opening.cp-loading .cp-portrait{animation-play-state:paused}

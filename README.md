@@ -4,10 +4,10 @@ Codex Pet 是一款桌面伙伴，包含原创龙娘和可选的 Q 版白龙。�
 
 ## 安装或升级
 
-运行 `./build-deb.sh` 构建，然后安装生成的包。例如，若生成的版本是 2.21.0：
+运行 `./build-deb.sh` 构建，然后安装生成的包。例如，若生成的版本是 2.22.0：
 
 ```sh
-sudo apt install ./dist/codex-pet_2.21.0_all.deb
+sudo apt install ./dist/codex-pet_2.22.0_all.deb
 ```
 
 安装其他版本时，请将命令中的文件名改为 `dist` 目录中实际生成的文件名。启动新版前，请通过旧桌宠的右键菜单退出旧进程，然后从应用菜单打开 **Codex Pet**，或在终端运行 `codex-pet`。安装包依赖 PyQt5、Pillow、Requests、PyJWT 和 cryptography，由 apt 安装这些依赖。
@@ -22,7 +22,7 @@ codex-pet-import ./codex-pet.tar.xz
 
 ## 角色互动
 
-- 单击任意角色可打招呼；双击打开浮动面板，查看 Codex 额度，并进入聊天、计划、任务或陪伴设置。拖动可移动角色。Q 版角色在拖动和落地时播放相应动作，动画时长和对齐方式来自素材清单。播放器同时只保留一个 Q 版动画源和一张显示帧；WebP 解码器可能使用额外工作内存。
+- 单击任意角色可打招呼；双击打开浮动面板，查看 Codex 额度，并进入聊天、计划、任务或陪伴设置。拖动可移动角色，松开龙娘时她会轻轻落下并回稳；空闲时她也会挥手。Q 版角色在拖动和落地时播放相应动作，动画时长和对齐方式来自素材清单。播放器同时只保留一个 Q 版动画源和一张显示帧；WebP 解码器可能使用额外工作内存。
 - 右键任意角色可选择 **一起互动**，邀请角色一起喝茶、一起小憩、给你鼓励或开心一下；任务进行时保持工作动作。也可以打开共享面板、查看额度、调整该角色大小、隐藏或恢复另一角色，或退出。最后一个可见角色不能隐藏，以便继续使用控件。
 - 龙娘支持可选的桌面巡游；Q 版的工作、完成和额度动作会响应面板事件。在 X11 下，当两个角色可见、位置接近且处于空闲状态时，会轮流发起简短对话；用户向其中一个角色打招呼时，另一个也可以回应。Wayland 无法可靠获取窗口绝对位置，因此关闭基于距离的自动互动。安静时间和暂停提醒会抑制主动消息，但点击角色仍可获得回应。
 - 用户更改后，窗口大小、显示状态、巡游状态及 X11 位置会保存在本机。Wayland 由桌面合成器决定位置，不保存坐标。
@@ -61,7 +61,7 @@ codex-pet-opening install "$HOME/.vscode/extensions/openai.chatgpt-26.1007.21434
 
 扩展安装目录不同时，请按实际位置替换最后的路径。从源码运行可用 `python3 opening/patch.py install 扩展目录`。补丁会备份两个原文件、校验原文件和资源的 SHA-256，在侧栏打开或重新显示时播放，并支持点击或 Esc 跳过以及系统的减少动态效果设置。
 
-开场包含龙娘眨眼、招手、翅膀动作和光效，尾巴保持静止。如果已经安装过旧版补丁，可在退出 VS Code 后升级：
+开场包含龙娘眨眼、招手、翅膀动作和光效，尾巴保持静止。首次加载时会先播放光效并等待角色图集解码，因此总时长可能增加；点击或按 Esc 可随时跳过。如果已经安装过旧版补丁，可在退出 VS Code 后升级：
 
 ```sh
 codex-pet-opening upgrade "$HOME/.vscode/extensions/openai.chatgpt-26.1007.21434-linux-x64"
@@ -101,6 +101,7 @@ codex-pet-desktop-opening remove
 
 ```sh
 /usr/bin/python3 -m unittest discover -s tests -v
+node tests/test_opening_animation.cjs
 QT_QPA_PLATFORM=offscreen /usr/bin/python3 src/codex_pet.py --quit-after-ms 4000
 ```
 

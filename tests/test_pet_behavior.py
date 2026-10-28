@@ -38,6 +38,25 @@ class BehaviorTests(unittest.TestCase):
                 self.assertEqual(self.pet.pose(4.0), pose)
                 self.assertEqual(self.pet.pose(5.1), 'idle')
 
+    def test_idle_wave_alternates_hand_then_returns_to_idle(self):
+        self.pet.tick(18.0)  # predictable RNG selects wave
+        self.assertEqual(self.pet.pose(18.0), 'wave')
+        self.assertEqual(self.pet.pose(18.3), 'wave2')
+        self.assertEqual(self.pet.pose(18.6), 'wave')
+        self.assertEqual(self.pet.pose(20.6), 'idle')
+
+    def test_landing_settles_once_and_does_not_override_work(self):
+        self.pet.set_activity('work', 0)
+        self.pet.begin_drag(1)
+        self.assertEqual(self.pet.landing_offset(1.2), 0)
+        self.pet.end_drag(2)
+        self.assertEqual(self.pet.landing_offset(2), 0)
+        self.assertGreater(self.pet.landing_offset(2.3), 2.9)
+        self.assertEqual(self.pet.pose(2.3), 'work')
+        self.assertEqual(self.pet.landing_offset(2.7), 0)
+        self.pet.begin_drag(3)
+        self.assertEqual(self.pet.landing_offset(3.3), 0)
+
     def test_drink_reminder_uses_tea_pose_then_returns_to_idle(self):
         self.pet.react(4.0, '喝水', 'tea')
         self.assertEqual(self.pet.pose(4.5), 'tea')

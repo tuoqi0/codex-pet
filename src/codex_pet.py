@@ -295,7 +295,8 @@ class CodexPet(QWidget):
         frame = self.frames[pose][int(now / .1) % len(self.frames[pose])]
         bounds = frame.size().scaled(470, 266, Qt.KeepAspectRatio)
         x = (self.WIDTH - bounds.width()) / 2
-        y = (self.HEIGHT - bounds.height()) / 2 + math.sin(now * 1.5) * 3
+        y = ((self.HEIGHT - bounds.height()) / 2 + math.sin(now * 1.5) * 3
+             + self.behavior.landing_offset(now))
         target = QRectF(x, y, bounds.width(), bounds.height())
         p.drawPixmap(target, frame, QRectF(frame.rect()))
         p.setOpacity(1.0)

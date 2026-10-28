@@ -86,6 +86,44 @@ class WindowTests(unittest.TestCase):
         self.assertLess(abs(self.pet.drag_motion.angle), .1)
         self.assertLess(self.pet.drag_motion.lift, .1)
 
+    def test_landing_visibly_settles_without_fading_the_character(self):
+        self.pet.timer.stop()
+        self.pet.drag_motion.angle = self.pet.drag_motion.lift = 0
+        now = 100.0
+        with mock.patch('codex_pet.time.monotonic', return_value=now):
+            self.pet.behavior.landed_at = None
+            resting = self.pet.grab().toImage()
+            self.pet.behavior.landed_at = now - self.pet.behavior.LANDING_SECONDS / 2
+            landing = self.pet.grab().toImage()
+        w, h = resting.width(), resting.height()
+        changed = sum(resting.pixel(x, y) != landing.pixel(x, y)
+                      for y in range(h) for x in range(w))
+        self.assertGreater(changed, 1000)
+        # It is one normally opaque sprite drawn in a new position, not a
+        # translucent cross-fade between two poses.
+        def opaque(image):
+            return sum(qAlpha(image.pixel(x, y)) >= 230
+                       for y in range(h) for x in range(w))
+        self.assertLess(abs(opaque(resting) - opaque(landing)), opaque(resting) * .02)
+
+    def test_landing_peak_does_not_clip_at_supported_sizes(self):
+        self.pet.timer.stop()
+        self.pet.drag_motion.angle = self.pet.drag_motion.lift = 0
+        for scale in (.63 * .75, .63, .63 * 1.25):
+            self.pet.set_scale(scale)
+            for phase in range(24):
+                now = 1000 + phase * .1
+                self.pet.behavior.landed_at = now - self.pet.behavior.LANDING_SECONDS / 2
+                with mock.patch('codex_pet.time.monotonic', return_value=now):
+                    image = self.pet.grab().toImage()
+                width, height = image.width(), image.height()
+                edges = ([(x, 0) for x in range(width)] +
+                         [(x, height - 1) for x in range(width)] +
+                         [(0, y) for y in range(height)] +
+                         [(width - 1, y) for y in range(height)])
+                with self.subTest(scale=scale, phase=phase):
+                    self.assertTrue(all(qAlpha(image.pixel(x, y)) == 0 for x, y in edges))
+
     def test_drag_extreme_tilts_do_not_clip_artwork(self):
         # Hold the animation clock fixed.  The tail reaches the bottom edge in
         # phases 21–23 at +9 degrees in the uncorrected implementation; random
