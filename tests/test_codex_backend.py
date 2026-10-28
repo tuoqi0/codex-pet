@@ -32,6 +32,141 @@ class Response:
 
 
 class BackendTests(unittest.TestCase):
+    def _stop_protocol(self, scenario):
+        """Exercise JSON-RPC over real pipes, including a pending approval."""
+        program = '''#!/usr/bin/python3
+import json, sys, time
+scenario = %r
+def emit(value):
+    print(json.dumps(value), flush=True)
+for line in sys.stdin:
+    message = json.loads(line)
+    method, ident = message.get('method'), message.get('id')
+    if method == 'initialize':
+        emit({'id': ident, 'result': {}})
+    elif method == 'account/read':
+        emit({'id': ident, 'result': {'account': {'type': 'chatgpt'}}})
+    elif method in ('thread/start', 'thread/resume'):
+        emit({'id': ident, 'result': {'thread': {'id': 'test-thread'}, 'model': 'test-model'}})
+    elif method == 'model/list':
+        emit({'id': ident, 'result': {'data': [{'model': 'test-model', 'inputModalities': ['text', 'image']}]}})
+    elif method == 'turn/start':
+        snapshot = next((item['path'] for item in message['params']['input'] if item['type'] == 'localImage'), None)
+        emit({'method': 'item/agentMessage/delta', 'params': {'delta': snapshot or 'started'}})
+        if scenario == 'starting':
+            time.sleep(.3)
+        emit({'id': ident, 'result': {'turn': {'id': 'test-turn'}}})
+        if scenario == 'approval':
+            emit({'id': 101, 'method': 'item/commandExecution/requestApproval', 'params': {'command': 'test'}})
+    elif method == 'turn/interrupt':
+        if scenario == 'disconnect':
+            sys.exit(0)
+        if scenario in ('timeout', 'close'):
+            time.sleep(3)
+        status = 'completed' if scenario == 'completed_race' else 'interrupted'
+        completed = {'method': 'turn/completed', 'params': {'turn': {'id': 'test-turn', 'status': status}}}
+        response = {'id': ident, 'result': {}}
+        if scenario == 'completion_before_ack':
+            emit(completed)
+            emit(response)
+        else:
+            emit(response)
+            emit(completed)
+''' % scenario
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / 'test-server'
+            executable.write_text(program)
+            executable.chmod(0o755)
+            events, ready, done = [], threading.Event(), threading.Event()
+            def emit(kind, value):
+                events.append((kind, value))
+                if (kind == 'approval' if scenario == 'approval' else kind == 'delta'):
+                    ready.set()
+                if kind == 'done':
+                    done.set()
+            b = backend.Backend(emit, auth=FakeAuth(), executable=str(executable))
+            images = None
+            if scenario == 'close':
+                image = Path(directory) / 'input.png'
+                image.write_bytes(self.image_bytes())
+                images = [str(image)]
+            b.send('task', 'test', directory, images=images)
+            self.assertTrue(ready.wait(5), events)
+            active = b.active
+            snapshot = next((value for kind, value in events if kind == 'delta'), None)
+            if scenario == 'close':
+                self.assertTrue(Path(snapshot).is_file())
+            started = time.monotonic()
+            if scenario == 'close':
+                b.close()
+                self.assertLess(time.monotonic() - started, 3)
+            else:
+                b.cancel()
+                self.assertLess(time.monotonic() - started, .2)
+            self.assertTrue(done.wait(5), events)
+            if scenario == 'close':
+                self.assertIsNotNone(active.process.poll())
+                self.assertFalse(Path(snapshot).exists())
+            return events
+
+    def test_stop_interrupts_active_turn_and_waiting_approval(self):
+        for scenario in ('active', 'approval', 'starting'):
+            with self.subTest(scenario=scenario):
+                events = self._stop_protocol(scenario)
+                self.assertEqual(events[-1], ('done', {'mode': 'task', 'status': 'interrupted'}))
+                self.assertFalse(any(event[0] == 'error' for event in events))
+
+    def test_stop_connection_loss_reports_unknown_not_interrupted(self):
+        events = self._stop_protocol('disconnect')
+        self.assertEqual(events[-1], ('done', {'mode': 'task', 'status': 'unknown'}))
+        self.assertTrue(any(kind == 'error' and '未知' in value for kind, value in events))
+
+    def test_stop_timeout_reports_unknown_not_interrupted(self):
+        with mock.patch.object(backend, 'STOP_TIMEOUT_SECONDS', .15):
+            events = self._stop_protocol('timeout')
+        self.assertEqual(events[-1], ('done', {'mode': 'task', 'status': 'unknown'}))
+
+    def test_quit_reaps_server_and_cleans_private_snapshots(self):
+        events = self._stop_protocol('close')
+        self.assertEqual(events[-1], ('done', {'mode': 'task', 'status': 'unknown'}))
+
+    def test_quit_rejects_new_work(self):
+        events = []
+        b = backend.Backend(lambda *event: events.append(event), auth=FakeAuth())
+        b.close()
+        b.send('task', 'test', '/tmp')
+        self.assertEqual(events[-1][0], 'error')
+        self.assertIn('退出', events[-1][1])
+        self.assertIsNone(b.active)
+
+    def test_successful_completion_racing_stop_stays_completed(self):
+        events = self._stop_protocol('completed_race')
+        self.assertEqual(events[-1], ('done', {'mode': 'task', 'status': 'completed'}))
+
+    def test_completion_before_interrupt_ack_does_not_wait_for_another_event(self):
+        events = self._stop_protocol('completion_before_ack')
+        self.assertEqual(events[-1], ('done', {'mode': 'task', 'status': 'interrupted'}))
+
+    def test_stop_before_turn_does_not_launch_request(self):
+        events, done = [], threading.Event()
+        b = backend.Backend(lambda *event: (events.append(event), done.set() if event[0] == 'done' else None), auth=FakeAuth())
+        started, release = threading.Event(), threading.Event()
+        def load(_):
+            started.set()
+            release.wait(2)
+            return []
+        class NoServer:
+            def __init__(self, *args, **kwargs):
+                raise AssertionError('server must not start after cancellation')
+        with mock.patch.object(backend, 'load_images', side_effect=load), \
+             mock.patch.object(backend, 'AppServer', NoServer):
+            b.send('task', 'test', '/tmp')
+            self.assertTrue(started.wait(2))
+            b.cancel()
+            release.set()
+            self.assertTrue(done.wait(2))
+        self.assertEqual(events[-1], ('done', {'mode': 'task', 'status': 'interrupted'}))
+
     @staticmethod
     def image_bytes():
         data = io.BytesIO()
@@ -412,14 +547,14 @@ class BackendTests(unittest.TestCase):
         class Server:
             last = None
             final_status = 'completed'
-            def __init__(self, emit, token, executable):
+            def __init__(self, emit, token, executable, stop_event=None):
                 self.token, self.requests, self.mode, self.completed_turns = token, [], None, {}
                 Server.last = self
             def request(self, method, params):
                 self.requests.append((method, params))
                 if method in ('thread/start', 'thread/resume'): return {'thread': {'id': 'thread'}, 'model': 'm'}
                 if method == 'turn/start': return {'turn': {'id': 'turn'}}
-            def next_event(self): return {'method': 'turn/completed', 'params': {'turn': {'id': 'turn', 'status': self.final_status}}}
+            def next_event(self, timeout=120): return {'method': 'turn/completed', 'params': {'turn': {'id': 'turn', 'status': self.final_status}}}
             def handle(self, event):
                 self.completed_turns[event['params']['turn']['id']] = event['params']['turn']
                 return event['method']

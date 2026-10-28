@@ -222,6 +222,7 @@ class PetPanel(QDialog):
         self.thread_cursor = None
         self.thread_reading = None
         self.images = []
+        self.images_after_login_need_review = False
         self.inflight_draft = None
         self.failed_drafts = []
         self.progress_entries = []
@@ -411,6 +412,11 @@ class PetPanel(QDialog):
         self.upload_hint.setObjectName('muted')
         self.upload_hint.setWordWrap(True)
         attachment_content.addWidget(self.upload_hint)
+        self.attachment_review = QLabel('登入已更新；附件仍在草稿中。發送前請確認帳戶和圖片。')
+        self.attachment_review.setObjectName('notice')
+        self.attachment_review.setWordWrap(True)
+        self.attachment_review.hide()
+        attachment_content.addWidget(self.attachment_review)
         self.image_list = QListWidget()
         self.image_list.setObjectName('imageList')
         self.image_list.setMaximumHeight(54)
@@ -552,6 +558,9 @@ class PetPanel(QDialog):
         return True
 
     def backend_cancel(self):
+        if self.busy:
+            self.cancel_button.setEnabled(False)
+            self.status.setText('正在請求停止，等待 Codex 確認結果…')
         self.backend.cancel()
 
     def _mode_changed(self):
@@ -720,6 +729,9 @@ class PetPanel(QDialog):
         for path in self.images:
             self.image_list.addItem(Path(path).name)
         self.attachments.setVisible(bool(self.images))
+        if not self.images:
+            self.images_after_login_need_review = False
+        self.attachment_review.setVisible(bool(self.images) and self.images_after_login_need_review)
         self.remove_image.setEnabled(not self.busy and bool(self.images))
 
     def _remove_image(self):
@@ -749,6 +761,8 @@ class PetPanel(QDialog):
         current = self.prompt.toPlainText()
         self.prompt.setPlainText(current + ('\n\n' if current else '') + draft['text'])
         self.images = images
+        self.images_after_login_need_review = (self.images_after_login_need_review
+                                                or bool(draft.get('review_after_login') and draft['images']))
         self.failed_drafts.pop(0)
         self._show_images()
         self._update_failed_drafts()
@@ -873,6 +887,28 @@ class PetPanel(QDialog):
                         transcript.add_message('user', text)
                 elif kind == 'agentMessage' and item.get('text'):
                     transcript.add_message('assistant', item['text'])
+                elif kind == 'plan' and item.get('text'):
+                    transcript.add_message('assistant', '[歷史計劃]\n' + str(item['text']))
+                elif kind in ('commandExecution', 'fileChange', 'webSearch',
+                              'mcpToolCall', 'dynamicToolCall', 'contextCompaction'):
+                    labels = {'commandExecution': '命令', 'fileChange': '文件變更',
+                              'webSearch': '網絡搜索', 'mcpToolCall': 'MCP 工具',
+                              'dynamicToolCall': '工具', 'contextCompaction': '上下文整理'}
+                    summary = '[歷史執行] ' + labels[kind]
+                    if item.get('status'):
+                        summary += ' · ' + str(item['status'])
+                    if kind == 'fileChange':
+                        paths = [str(change['path']) for change in (item.get('changes') or [])
+                                 if isinstance(change, dict) and change.get('path')]
+                        if paths:
+                            summary += '\n' + '\n'.join(paths[:20])
+                            if len(paths) > 20:
+                                summary += '\n…'
+                    elif kind == 'mcpToolCall':
+                        tool = ' / '.join(str(item[key]) for key in ('server', 'tool') if item.get(key))
+                        if tool:
+                            summary += '\n' + tool
+                    transcript.add_message('assistant', summary)
         self.cwd = thread['cwd']
         self.project_label.setText(self.cwd)
         self.selected_thread = thread['id']
@@ -891,7 +927,7 @@ class PetPanel(QDialog):
         draft_text = self.prompt.toPlainText()
         text = draft_text.strip()
         mode = self.mode.currentData()
-        if not text or self.busy:
+        if (not text and not self.images) or self.busy:
             return
         if self.login_inflight:
             self.status.setText('正在等待授權完成，請稍後再發送。')
@@ -908,6 +944,15 @@ class PetPanel(QDialog):
             self.options_scroll.ensureWidgetVisible(self.permission)
             self.permission.setFocus()
             return
+        if self.images and self.images_after_login_need_review:
+            names = '\n'.join(Path(path).name for path in self.images)
+            confirmation = QMessageBox.question(
+                self, '確認附件與登入帳戶',
+                '登入已更新，請確認目前模式使用的帳戶，並確認要發送這些草稿圖片：\n\n' + names,
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if confirmation != QMessageBox.Yes:
+                return
+            self.images_after_login_need_review = False
         self.busy = True
         self.active_mode = mode
         self.last_error = None
@@ -1048,7 +1093,11 @@ class PetPanel(QDialog):
         elif event == 'login_complete':
             self.login_inflight = False
             self.login_button.setEnabled(not self.busy)
-            self.images.clear()
+            if self.images:
+                self.images_after_login_need_review = True
+            for draft in self.failed_drafts:
+                if draft['images']:
+                    draft['review_after_login'] = True
             self._show_images()
             for mode in ('chat', 'plan'):
                 self.model_generation[mode] += 1
@@ -1069,15 +1118,22 @@ class PetPanel(QDialog):
             self.status.setText(str(data))
         elif event == 'done':
             result = data if isinstance(data, dict) else {}
-            if result.get('status') == 'completed':
+            outcome = result.get('status')
+            if outcome == 'completed':
                 self.status.setText('完成')
+            elif outcome == 'unknown':
+                message = '任務結果未知，無法確認是否已停止或完成。請先檢查 Codex 對話及工作目錄；重試可能重複執行。'
+                self.status.setText(message)
+                self.transcript.add_message('assistant', message)
+            elif outcome == 'interrupted':
+                self.status.setText('已確認停止；此前可能已有部分操作。')
             elif self.last_error:
                 self.status.setText('請求失敗：' + self.last_error)
             else:
-                self.status.setText('已結束：' + str(result.get('status', '未知')))
+                self.status.setText('已結束：' + str(outcome or '未知'))
             draft = self.inflight_draft
             self.inflight_draft = None
-            if result.get('status') != 'completed' and draft:
+            if outcome != 'completed' and draft:
                 if not self.prompt.toPlainText() and not self.images:
                     self.prompt.setPlainText(draft['text'])
                     self.images = draft['images']
@@ -1086,7 +1142,7 @@ class PetPanel(QDialog):
                 else:
                     self.failed_drafts.append(draft)
                     self.status.setText(self.status.text() + '；草稿可恢復，上次請求可能已部分處理。')
-            if result.get('status') == 'completed' and result.get('mode') == 'task':
+            if outcome == 'completed' and result.get('mode') == 'task':
                 self.action_callback('celebrate')
             else:
                 self.action_callback('idle')

@@ -166,6 +166,67 @@ class ManagerIntegrationTests(unittest.TestCase):
             delayed.call_args.args[1]()
             self.assertEqual(manager.dragon.behavior.message, '我也在這裡陪你。')
 
+    def test_click_reply_still_works_when_automatic_companionship_is_suppressed(self):
+        manager = self.manager
+        manager.dragon.move(20, 100)
+        manager.qpet.move(340, 100)
+        with mock.patch('codex_pet.datetime') as wall, \
+                mock.patch.object(codex_pet.QTimer, 'singleShot') as delayed:
+            wall.now.return_value = datetime(2026, 10, 28, 12, 0)
+            for case in ('quiet', 'disabled', 'paused'):
+                for source in (manager.dragon, manager.qpet):
+                    with self.subTest(case=case, source=source.windowTitle()):
+                        settings = manager.companion.settings
+                        settings.enabled = case != 'disabled'
+                        settings.quiet_start = '11:00' if case == 'quiet' else '00:00'
+                        settings.quiet_end = '13:00' if case == 'quiet' else '00:00'
+                        manager.companion.paused_until = float('inf') if case == 'paused' else 0
+                        manager.dragon.behavior.reaction_until = 0
+                        manager.dragon.behavior.message = ''
+                        manager.qpet.message = ''
+                        manager.qpet.player.play('idle')
+                        delayed.reset_mock()
+                        QTest.mouseClick(source, Qt.LeftButton, pos=QPoint(70, 70))
+                        QTest.qWait(QApplication.doubleClickInterval() + 100)
+                        delayed.assert_called_once()
+                        self.assertEqual(delayed.call_args.args[0], 1200)
+                        delayed.call_args.args[1]()
+                        if source is manager.dragon:
+                            self.assertEqual(manager.qpet.message, '我也在，和你一起！')
+                        else:
+                            self.assertEqual(manager.dragon.behavior.message, '我也在這裡陪你。')
+                        self.assertFalse(manager.interaction_ready())
+
+    def test_click_reply_rechecks_busy_hidden_and_dragging_before_delayed_response(self):
+        manager = self.manager
+        manager.dragon.move(20, 100)
+        manager.qpet.move(340, 100)
+        panel = manager._ensure_panel()
+        with mock.patch.object(codex_pet.QTimer, 'singleShot') as delayed:
+            for case in ('busy', 'hidden', 'dragging'):
+                with self.subTest(case=case):
+                    manager.dragon.behavior.reaction_until = 0
+                    manager.qpet.player.play('idle')
+                    manager.qpet.message = ''
+                    manager.qpet.show()
+                    manager.qpet.press_global = None
+                    panel.busy = False
+                    delayed.reset_mock()
+                    QTest.mouseClick(manager.dragon, Qt.LeftButton, pos=QPoint(70, 70))
+                    QTest.qWait(QApplication.doubleClickInterval() + 100)
+                    delayed.assert_called_once()
+                    if case == 'busy':
+                        panel.busy = True
+                    elif case == 'hidden':
+                        manager.qpet.hide()
+                    else:
+                        manager.qpet.press_global = QPoint(1, 1)
+                    delayed.call_args.args[1]()
+                    self.assertEqual(manager.qpet.message, '')
+            panel.busy = False
+            manager.qpet.press_global = None
+            manager.qpet.show()
+
     def test_quota_does_not_interrupt_work_animation(self):
         manager = self.manager
         manager.play_action('work')

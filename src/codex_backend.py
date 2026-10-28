@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import time
 
 import requests
 from PIL import Image, UnidentifiedImageError
@@ -27,6 +28,16 @@ MAX_IMAGE_TOTAL_BYTES = 20 * 1024 * 1024
 MAX_CHAT_IMAGE_BYTES = 40 * 1024 * 1024
 IMAGE_FORMATS = {'PNG': ('image/png', '.png'), 'JPEG': ('image/jpeg', '.jpg'),
                  'WEBP': ('image/webp', '.webp'), 'GIF': ('image/gif', '.gif')}
+
+STOP_TIMEOUT_SECONDS = 8
+
+
+class CancelledBeforeTurn(Exception):
+    """The user stopped before a turn was sent."""
+
+
+class TurnStateUnknown(RuntimeError):
+    """The server did not confirm the outcome of a submitted turn."""
 
 
 def load_images(paths):
@@ -95,8 +106,9 @@ def discover_codex(home=None):
 
 
 class AppServer:
-    def __init__(self, emit, token=None, executable=None):
+    def __init__(self, emit, token=None, executable=None, stop_event=None):
         self.emit = emit
+        self.stop_event = stop_event
         binary = executable or discover_codex()
         if not binary:
             raise RuntimeError('未找到 Codex CLI；请安装官方 Codex CLI 或 VS Code Codex 扩展。')
@@ -136,7 +148,7 @@ class AppServer:
         self.mode = None
         threading.Thread(target=self._read, daemon=True).start()
         try:
-            self.request('initialize', {'clientInfo': {'name': 'codex_pet', 'title': 'Codex Pet', 'version': '2.6.0'}, 'capabilities': {'experimentalApi': True}})
+            self.request('initialize', {'clientInfo': {'name': 'codex_pet', 'title': 'Codex Pet', 'version': '2.7.0'}, 'capabilities': {'experimentalApi': True}})
             self.write({'method': 'initialized', 'params': {}})
         except Exception:
             self.close()
@@ -160,20 +172,41 @@ class AppServer:
             self.process.stdin.flush()
 
     def request(self, method, params):
+        if self.stop_event and self.stop_event.is_set() and method not in ('turn/start', 'turn/interrupt'):
+            raise CancelledBeforeTurn()
         self.counter += 1
         request_id = self.counter
         self.write({'id': request_id, 'method': method, 'params': params})
+        cancel_deadline = None
+        deadline = time.monotonic() + 120
         while True:
-            event = self.next_event()
+            if self.stop_event and self.stop_event.is_set():
+                if method not in ('turn/start', 'turn/interrupt'):
+                    raise CancelledBeforeTurn()
+                if cancel_deadline is None:
+                    cancel_deadline = time.monotonic() + STOP_TIMEOUT_SECONDS
+            remaining = (cancel_deadline or deadline) - time.monotonic()
+            if remaining <= 0:
+                if cancel_deadline is not None:
+                    raise TurnStateUnknown('停止请求未得到确认；任务执行状态未知。')
+                raise RuntimeError('Codex App Server 等待超时。')
+            try:
+                event = self.events.get(timeout=min(remaining, .2))
+            except queue.Empty:
+                continue
+            if event is None:
+                if cancel_deadline is not None:
+                    raise TurnStateUnknown('停止请求未得到确认；任务执行状态未知。')
+                raise RuntimeError('Codex App Server 已退出。')
             if event.get('id') == request_id and 'method' not in event:
                 if 'error' in event:
                     raise RuntimeError(event['error'].get('message', 'Codex 请求失败'))
                 return event.get('result', {})
             self.handle(event)
 
-    def next_event(self):
+    def next_event(self, timeout=120):
         try:
-            event = self.events.get(timeout=120)
+            event = self.events.get(timeout=timeout)
         except queue.Empty:
             raise RuntimeError('Codex App Server 等待超时。')
         if event is None:
@@ -239,6 +272,10 @@ class AppServer:
                                        'status': item.get('status'), 'detail': detail})
         return method
 
+    def wake(self):
+        """Wake the sole event consumer after a stop request."""
+        self.events.put({'_pet_wake': True})
+
     def approve(self, request_id, decision):
         if request_id not in self.pending_approvals:
             raise RuntimeError('审批请求已失效。')
@@ -270,11 +307,17 @@ class AppServer:
 
     def close(self):
         if self.process.poll() is None:
-            self.process.terminate()
+            try:
+                self.process.terminate()
+            except ProcessLookupError:
+                pass
             try:
                 self.process.wait(timeout=3)
             except subprocess.TimeoutExpired:
-                self.process.kill()
+                try:
+                    self.process.kill()
+                except ProcessLookupError:
+                    pass
                 self.process.wait(timeout=3)
         for pipe in (self.process.stdin, self.process.stdout):
             if pipe:
@@ -290,6 +333,8 @@ class Backend:
         self.active_lock = threading.Lock()
         self.cancelled = threading.Event()
         self.response = None
+        self.worker = None
+        self.closing = False
         self.history = []
         self.history_image_bytes = 0
         self.threads = {}
@@ -462,6 +507,9 @@ class Backend:
             self.emit('error', 'Codex 对话只能在任务模式中继续；计划和普通对话使用独立授权。')
             return
         with self.active_lock:
+            if self.closing:
+                self.emit('error', '桌宠正在退出。')
+                return
             if self.active is not None:
                 self.emit('error', '已有请求正在运行。')
                 return
@@ -478,22 +526,31 @@ class Backend:
                     return
                 if mode == 'chat':
                     self._chat(text, model, loaded_images)
-                    status = 'completed'
+                    status = 'interrupted' if self.cancelled.is_set() else 'completed'
                 else:
                     status = self._agent(mode, text, cwd, model, effort, thread_id, task_sandbox, loaded_images)
-                if self.cancelled.is_set():
-                    status = 'interrupted'
+            except CancelledBeforeTurn:
+                status = 'interrupted'
+            except TurnStateUnknown as exc:
+                status = 'unknown'
+                self.emit('error', str(exc))
             except Exception as exc:
-                if not self.cancelled.is_set():
-                    self.emit('error', str(exc))
-                else:
+                if self.cancelled.is_set() and mode == 'chat':
                     status = 'interrupted'
+                else:
+                    self.emit('error', str(exc))
             finally:
                 with self.active_lock:
                     self.active = None
                     self.response = None
                 self.emit('done', {'mode': mode, 'status': status})
-        threading.Thread(target=run, daemon=True).start()
+        worker = threading.Thread(target=run, daemon=True)
+        with self.active_lock:
+            if self.closing:
+                self.active = None
+                return
+            self.worker = worker
+            worker.start()
 
     def _chat(self, text, model=None, images=()):
         token = self.auth.token()
@@ -563,14 +620,14 @@ class Backend:
         if not directory.is_dir():
             raise RuntimeError('请选择有效的工作目录。')
         token = self.auth.token() if mode == 'plan' else None
-        server = AppServer(self.emit, token=token, executable=self.executable)
+        server = AppServer(self.emit, token=token, executable=self.executable, stop_event=self.cancelled)
         server.mode = mode
         snapshots = None
         with self.active_lock:
             self.active = server
         try:
             if self.cancelled.is_set():
-                return
+                raise CancelledBeforeTurn()
             if mode == 'task':
                 account = server.request('account/read', {'refreshToken': False}).get('account')
                 if not account or account.get('type') != 'chatgpt':
@@ -653,26 +710,46 @@ class Backend:
                 start['collaborationMode'] = {'mode': 'plan', 'settings': {'model': params['model'], 'developer_instructions': None}}
                 start['sandboxPolicy'] = {'type': 'readOnly', 'networkAccess': False}
                 start['approvalPolicy'] = 'never'
+            if self.cancelled.is_set():
+                raise CancelledBeforeTurn()
             try:
                 turn = server.request('turn/start', start)['turn']
+            except TurnStateUnknown:
+                raise
             except RuntimeError as exc:
                 if images:
                     raise RuntimeError('图片任务无法启动：' + str(exc)) from exc
                 raise
-            if self.cancelled.is_set():
-                server.request('turn/interrupt', {'threadId': thread['id'], 'turnId': turn['id']})
+            interrupt_sent = False
+            interrupt_deadline = None
             while True:
                 result = server.completed_turns.pop(turn['id'], None)
                 if result is not None:
                     turn_status = result.get('status')
                     if turn_status in ('completed', 'interrupted'):
                         return turn_status
-                    if self.cancelled.is_set():
-                        return 'interrupted'
                     if images:
                         raise RuntimeError('图片任务未完成，请检查模型的图片能力、账户授权或额度：' + str(turn_status))
                     raise RuntimeError('Codex 任务未完成：' + str(turn_status))
-                server.handle(server.next_event())
+                if self.cancelled.is_set() and not interrupt_sent:
+                    interrupt_sent = True
+                    interrupt_deadline = time.monotonic() + STOP_TIMEOUT_SECONDS
+                    try:
+                        server.request('turn/interrupt', {'threadId': thread['id'], 'turnId': turn['id']})
+                    except RuntimeError as exc:
+                        # Completion can race with the interrupt response.
+                        if turn['id'] not in server.completed_turns:
+                            raise TurnStateUnknown('停止请求未得到确认；任务执行状态未知。') from exc
+                    # request() can consume turn/completed before the response.
+                    # Recheck the cache before waiting for any further events.
+                    continue
+                timeout = 120 if interrupt_deadline is None else max(0, interrupt_deadline - time.monotonic())
+                try:
+                    server.handle(server.next_event(timeout))
+                except RuntimeError as exc:
+                    if self.cancelled.is_set():
+                        raise TurnStateUnknown('未收到任务的最终状态；请检查 Codex 会话。') from exc
+                    raise
         finally:
             try:
                 server.close()
@@ -686,13 +763,16 @@ class Backend:
             active = self.active
             response = self.response
         if isinstance(active, AppServer):
-            active.close()
+            active.wake()
         if response is not None:
-            response.close()
+            threading.Thread(target=response.close, daemon=True).start()
 
     def approve(self, request_id, decision):
         with self.active_lock:
             active = self.active
+            if self.cancelled.is_set():
+                self.emit('error', '任务正在停止，审批请求已失效。')
+                return
         if isinstance(active, AppServer):
             try:
                 active.approve(request_id, decision)
@@ -700,4 +780,29 @@ class Backend:
                 self.emit('error', str(exc))
 
     def close(self):
+        with self.active_lock:
+            self.closing = True
         self.cancel()
+        with self.active_lock:
+            worker = self.worker
+        if not worker or worker is threading.current_thread():
+            return
+        # aboutToQuit is the last chance to reap the App Server and let its
+        # worker remove private image snapshots before the process exits.
+        worker.join(1.0)
+        if not worker.is_alive():
+            return
+        with self.active_lock:
+            active = self.active
+        if isinstance(active, AppServer) and active.process.poll() is None:
+            try:
+                active.process.terminate()
+            except ProcessLookupError:
+                pass
+        worker.join(.75)
+        if worker.is_alive() and isinstance(active, AppServer) and active.process.poll() is None:
+            try:
+                active.process.kill()
+            except ProcessLookupError:
+                pass
+            worker.join(.75)

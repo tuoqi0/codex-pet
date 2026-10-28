@@ -155,7 +155,7 @@ class CompanionSettingsDialog(QDialog):
         row.addWidget(self.quiet_end)
         row.addStretch(1)
         layout.addLayout(row)
-        layout.addWidget(self._hint('这段时间不主动打扰；开始与结束相同表示不设置安静时间。'))
+        layout.addWidget(self._hint('安静时间、关闭或暂停主动陪伴会停止主动提醒和角色聊天；点击角色时仍可回应。开始与结束相同表示不设置安静时间。'))
         body.addWidget(card)
 
         card, layout = self._card()

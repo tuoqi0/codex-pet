@@ -9,7 +9,7 @@ os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from PyQt5.QtCore import QCoreApplication, QEvent
 from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QApplication, QDialog
+from PyQt5.QtWidgets import QApplication, QDialog, QLabel
 from PyQt5 import sip
 from companion import CompanionSettings
 from companion_settings_ui import CompanionSettingsDialog
@@ -61,6 +61,11 @@ class CompanionDialogTests(unittest.TestCase):
         self.dialog._snooze()
         self.assertEqual(self.snoozed, [60])
         self.assertEqual(self.saved, [])
+
+    def test_explains_suppressed_automatic_and_user_requested_interaction(self):
+        hints = [label.text() for label in self.dialog.findChildren(QLabel)]
+        self.assertTrue(any('停止主动提醒和角色聊天' in text and '点击角色时仍可回应' in text
+                            for text in hints))
 
     def test_weather_requires_selection_and_search_uses_qt_signal(self):
         self.dialog.weather_enabled.setChecked(True)

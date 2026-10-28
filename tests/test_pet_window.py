@@ -122,6 +122,31 @@ class WindowTests(unittest.TestCase):
                       for y in range(int(ih*.17), int(ih*.27))]
             self.assertGreater(sum(alpha >= 230 for alpha in alphas), len(alphas) * .75)
 
+    def test_wave_alternates_hand_at_default_size_without_changing_face_or_outline(self):
+        self.assertEqual((self.pet.width(), self.pet.height()), (302, 189))
+        renders = []
+        for pose in ('wave', 'wave2'):
+            with mock.patch.object(self.pet.behavior, 'pose', return_value=pose), \
+                    mock.patch('codex_pet.time.monotonic', return_value=100):
+                renders.append(self.pet.grab().toImage())
+        first, second = renders
+        w, h = first.width(), first.height()
+        hand_box = (int(w * .43), int(h * .20), int(w * .56), int(h * .45))
+        changed = []
+        visible_bounds = []
+        for frame in renders:
+            visible = [(x, y) for y in range(h) for x in range(w) if qAlpha(frame.pixel(x, y))]
+            visible_bounds.append((min(x for x, _ in visible), min(y for _, y in visible),
+                                   max(x for x, _ in visible), max(y for _, y in visible)))
+        self.assertEqual(visible_bounds[0], visible_bounds[1])
+        for y in range(h):
+            for x in range(w):
+                if first.pixel(x, y) != second.pixel(x, y):
+                    changed.append((x, y))
+        self.assertGreater(len(changed), 100)
+        self.assertTrue(all(hand_box[0] <= x < hand_box[2] and hand_box[1] <= y < hand_box[3]
+                            for x, y in changed))
+
 
 if __name__ == '__main__':
     unittest.main()

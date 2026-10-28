@@ -7,7 +7,7 @@ from pathlib import Path
 import sys
 import time
 
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFilter
 from PyQt5.QtCore import QObject, QPointF, QRectF, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QImage, QPainter, QPixmap
 from PyQt5.QtWidgets import QApplication, QMenu, QWidget
@@ -21,6 +21,24 @@ def asset_path(name):
     return installed if installed.is_file() else directory.parent / 'assets' / name
 
 
+def wave_alternate(base_path, alternate_path):
+    """Keep the same figure and replace only the raised hand and wrist.
+
+    The two source illustrations are not rigged layers. A feathered local
+    patch keeps the face, torso and silhouette fixed between greeting frames.
+    """
+    with Image.open(base_path) as source:
+        base = source.convert('RGBA')
+    with Image.open(alternate_path) as source:
+        alternate = source.convert('RGBA').resize(base.size, Image.Resampling.LANCZOS)
+    width, height = base.size
+    mask = Image.new('L', base.size, 0)
+    ImageDraw.Draw(mask).rectangle((round(width * .460), round(height * .238),
+                                    round(width * .532), round(height * .382)), fill=255)
+    mask = mask.filter(ImageFilter.GaussianBlur(max(1, round(width * .004))))
+    return Image.composite(alternate, base, mask)
+
+
 def motion_frames(path):
     """Gently deform the outer wing and tail regions of the flat illustration.
 
@@ -28,9 +46,12 @@ def motion_frames(path):
     The centre and joins remain fixed, and a single complete image is drawn per
     frame so pose changes never overlay two translucent faces.
     """
-    with Image.open(path) as source:
-        original = source.convert('RGBA')
-        original.thumbnail((560, 694), Image.Resampling.LANCZOS)
+    if isinstance(path, Image.Image):
+        original = path.convert('RGBA')
+    else:
+        with Image.open(path) as source:
+            original = source.convert('RGBA')
+    original.thumbnail((560, 694), Image.Resampling.LANCZOS)
     width, height = original.size
     frames = []
     for index in range(12):
@@ -78,7 +99,8 @@ class CodexPet(QWidget):
                                ('wave', 'dragon-seated-wave.png'), ('tea', 'dragon-seated-tea.png'),
                                ('happy', 'dragon-seated-happy.png'), ('work', 'dragon-seated-work.png')):
             self.frames[pose] = motion_frames(asset_path(filename))
-        self.frames['wave2'] = self.frames['wave']
+        self.frames['wave2'] = motion_frames(wave_alternate(
+            asset_path('dragon-seated-wave.png'), asset_path('dragon-seated-wave2.png')))
         self.setWindowTitle('Codex Pet')
         self.setFixedSize(round(self.WIDTH * self.scale_factor), round(self.HEIGHT * self.scale_factor))
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint)
@@ -583,12 +605,17 @@ class PetManager:
             self.floating.hide()
             self.open_panel('chat')
 
-    def interaction_ready(self, allow_dragon_reaction=False, allow_q_reaction=False):
+    def interaction_ready(self, allow_dragon_reaction=False, allow_q_reaction=False,
+                          user_initiated=False):
         dragon, qpet = self.dragon, self.qpet
+        # Quiet hours, disabled reminders and snooze suppress unsolicited
+        # conversation. A response to an explicit click is user-initiated.
+        if (not user_initiated and
+                (not self.companion.settings.enabled or self.companion._quiet(datetime.now())
+                 or time.monotonic() < self.companion.paused_until)):
+            return False
         # Qt cannot reliably establish absolute window positions on Wayland.
-        if (not self.companion.settings.enabled or self.companion._quiet(datetime.now())
-                or time.monotonic() < self.companion.paused_until
-                or (self.panel and self.panel.busy)
+        if ((self.panel and self.panel.busy)
                 or not qpet or dragon.wayland or qpet.wayland or not dragon.isVisible()
                 or not qpet.isVisible() or dragon.press_global is not None
                 or qpet.press_global is not None
@@ -603,16 +630,19 @@ class PetManager:
     def on_user_greet(self, source):
         """Let the other nearby companion join a user's greeting once."""
         if not self.interaction_ready(allow_dragon_reaction=source is self.dragon,
-                                      allow_q_reaction=source is self.qpet):
+                                      allow_q_reaction=source is self.qpet,
+                                      user_initiated=True):
             return
         self.next_interaction = time.monotonic() + self.dragon.behavior.rng.uniform(35.0, 55.0)
         message = self.dragon.behavior.message if source is self.dragon else self.qpet.message
 
         def reply_if_ready():
             if source is self.dragon:
-                if self.dragon.behavior.message == message and self.interaction_ready(allow_dragon_reaction=True):
+                if (self.dragon.behavior.message == message
+                        and self.interaction_ready(allow_dragon_reaction=True, user_initiated=True)):
                     self.qpet.respond('我也在，和你一起！')
-            elif (self.qpet.message == message and self.interaction_ready(allow_q_reaction=True)):
+            elif (self.qpet.message == message
+                  and self.interaction_ready(allow_q_reaction=True, user_initiated=True)):
                 self.dragon.react('我也在這裡陪你。')
 
         QTimer.singleShot(1200, reply_if_ready)

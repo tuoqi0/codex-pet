@@ -356,6 +356,41 @@ class PanelTests(unittest.TestCase):
         self.panel._send()
         self.assertEqual(self.panel.backend.calls[-1], ('send', 'plan', '研究圖片', '/tmp', 'model', None, None, None, ['/tmp/plan.png']))
 
+    def test_image_only_message_is_sent_without_synthetic_prompt(self):
+        self.panel.images = ['/tmp/one.png']
+        self.panel._show_images()
+        self.panel.prompt.clear()
+        self.panel._send()
+        self.assertEqual(self.panel.backend.calls[-1],
+                         ('send', 'chat', '', None, 'model', None, None, None, ['/tmp/one.png']))
+        self.assertIn('[圖片附件]', self.panel.transcript.toPlainText())
+
+    def test_login_retains_images_and_requires_explicit_account_review(self):
+        self.panel.images = ['/tmp/one.png']
+        self.panel.prompt.setPlainText('草稿')
+        self.panel._event('login_complete', None)
+        self.assertEqual(self.panel.images, ['/tmp/one.png'])
+        self.assertFalse(self.panel.attachment_review.isHidden())
+        self.panel.model_cache['chat'] = [{'id': 'model', 'name': 'Model'}]
+        self.panel._show_models('chat')
+        with mock.patch.object(pet_panel.QMessageBox, 'question', return_value=pet_panel.QMessageBox.No) as question:
+            self.panel._send()
+            self.assertEqual(question.call_args.args[-1], pet_panel.QMessageBox.No)
+        self.assertEqual(self.panel.images, ['/tmp/one.png'])
+        self.assertEqual(self.panel.prompt.toPlainText(), '草稿')
+        self.assertFalse(any(call[0] == 'send' for call in self.panel.backend.calls))
+        with mock.patch.object(pet_panel.QMessageBox, 'question', return_value=pet_panel.QMessageBox.Yes):
+            self.panel._send()
+        self.assertEqual(self.panel.backend.calls[-1][-1], ['/tmp/one.png'])
+
+    def test_login_marks_recoverable_image_drafts_for_account_review(self):
+        self.panel.failed_drafts = [{'mode': 'chat', 'cwd': None, 'text': 'old', 'images': ['/tmp/old.png']}]
+        self.panel._event('login_complete', None)
+        self.panel._restore_failed_draft()
+        self.assertEqual(self.panel.images, ['/tmp/old.png'])
+        self.assertTrue(self.panel.images_after_login_need_review)
+        self.assertFalse(self.panel.attachment_review.isHidden())
+
     def test_failed_image_send_restores_unmodified_draft_and_does_not_resend(self):
         with mock.patch.object(pet_panel.QFileDialog, 'getOpenFileNames', return_value=(['/tmp/one.png'], '')):
             self.panel.add_image.click()
@@ -385,6 +420,43 @@ class PanelTests(unittest.TestCase):
         self.assertEqual(self.panel.images, ['/tmp/one.png'])
         self.assertEqual(self.panel.failed_drafts, [])
         self.assertIn('可能已部分處理', self.panel.status.text())
+
+    def test_stop_with_unknown_result_warns_and_preserves_draft(self):
+        self.panel.mode.setCurrentIndex(2)
+        self.panel.cwd = '/tmp'
+        self.panel.prompt.setPlainText('執行任務')
+        self.panel.images = ['/tmp/task.png']
+        self.panel._show_images()
+        self.panel._send()
+        self.panel.backend_cancel()
+        self.assertEqual(self.panel.backend.calls[-1], ('cancel',))
+        self.assertFalse(self.panel.cancel_button.isEnabled())
+        self.assertIn('等待', self.panel.status.text())
+        self.panel.bridge.received.emit('error', '連線中斷')
+        self.panel.bridge.received.emit('done', {'mode': 'task', 'status': 'unknown'})
+        self.assertIn('結果未知', self.panel.status.text())
+        self.assertIn('無法確認', self.panel.status.text())
+        self.assertIn('重試可能重複', self.panel.transcript.toPlainText())
+        self.assertEqual(self.panel.prompt.toPlainText(), '執行任務')
+        self.assertEqual(self.panel.images, ['/tmp/task.png'])
+        self.assertEqual(self.actions[-1], 'idle')
+        self.assertFalse(self.panel.busy)
+        self.assertEqual(sum(call[0] == 'send' for call in self.panel.backend.calls), 1)
+
+    def test_completed_after_stop_is_completion_not_restored_draft(self):
+        self.panel.mode.setCurrentIndex(2)
+        self.panel.cwd = '/tmp'
+        self.panel.prompt.setPlainText('已完成的任務')
+        self.panel.images = ['/tmp/task.png']
+        self.panel._show_images()
+        self.panel._send()
+        self.panel.backend_cancel()
+        self.panel.bridge.received.emit('done', {'mode': 'task', 'status': 'completed'})
+        self.assertEqual(self.panel.status.text(), '完成')
+        self.assertEqual(self.panel.prompt.toPlainText(), '')
+        self.assertEqual(self.panel.images, [])
+        self.assertEqual(self.panel.failed_drafts, [])
+        self.assertEqual(self.actions[-1], 'celebrate')
 
     def test_draft_recovery_preserves_inputs_when_image_limit_would_be_exceeded(self):
         self.panel.failed_drafts = [{'mode': 'chat', 'cwd': None, 'text': 'old', 'images': ['/tmp/old.png']}]
@@ -425,6 +497,28 @@ class PanelTests(unittest.TestCase):
               {'type': 'localImage', 'path': '/tmp/private-snapshot.png'}]}]}]}})
         self.assertIn('[圖片]', self.panel.transcript.toPlainText())
         self.assertNotIn('private-snapshot', self.panel.transcript.toPlainText())
+
+    def test_selected_history_shows_plan_and_safe_tool_summaries_in_order(self):
+        self.panel.mode.setCurrentIndex(2)
+        self.assertFalse(any(call[0].startswith('codex_thread') for call in self.panel.backend.calls))
+        self.panel._open_threads()
+        self.panel.bridge.received.emit('codex_threads', {'data': [{'id': 'selected', 'cwd': '/tmp'}]})
+        self.panel.thread_list.setCurrentRow(0)
+        self.panel.thread_open.click()
+        self.panel.bridge.received.emit('codex_thread', {'thread': {'id': 'selected', 'cwd': '/tmp', 'turns': [
+            {'items': [
+                {'type': 'userMessage', 'content': [{'type': 'text', 'text': '工作'}]},
+                {'type': 'plan', 'text': '第一步：檢查'},
+                {'type': 'commandExecution', 'command': 'private command', 'aggregatedOutput': 'private output', 'status': 'completed'},
+                {'type': 'fileChange', 'changes': [{'path': 'example.py', 'diff': 'private diff'}], 'status': 'completed'},
+                {'type': 'mcpToolCall', 'server': 'docs', 'tool': 'lookup', 'arguments': 'private arguments'},
+                {'type': 'agentMessage', 'text': '完成'}]}]}})
+        text = self.panel.transcript.toPlainText()
+        self.assertLess(text.index('工作'), text.index('第一步：檢查'))
+        self.assertLess(text.index('第一步：檢查'), text.index('歷史執行'))
+        self.assertLess(text.index('example.py'), text.index('完成'))
+        self.assertIn('docs / lookup', text)
+        self.assertNotIn('private', text)
 
     def test_explicit_codex_history_selection_pagination_and_new_conversation(self):
         self.panel.mode.setCurrentIndex(2)

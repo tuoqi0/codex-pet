@@ -12,7 +12,7 @@ they are not independently rigged. Patrol moves the figure as a whole.
 Build with `./build-deb.sh`. Install the resulting package with:
 
 ```sh
-sudo apt install ./dist/codex-pet_2.6.0_all.deb
+sudo apt install ./dist/codex-pet_2.7.0_all.deb
 ```
 
 Quit an already-running older version through its right-click menu before
@@ -47,7 +47,8 @@ unusable, the original dragon still runs, and the terminal shows a reason.
   both are visible, nearby and idle on X11, they occasionally greet each other
   and can respond to a user greeting the other character.
   Automatic proximity interaction is disabled on Wayland, where absolute
-  window positions are not reliable.
+  window positions are not reliable. Quiet hours and snoozing suppress
+  spontaneous messages; clicking a character can still prompt a reply.
 
 Companion settings offer optional rest, water, meal and greeting reminders,
 quiet hours and a one-hour snooze. Reminders use the pet's runtime and the
