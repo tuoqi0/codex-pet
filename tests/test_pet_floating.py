@@ -1,6 +1,7 @@
 import os
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
@@ -8,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 
 from PyQt5.QtWidgets import QApplication, QWidget
 from PyQt5.QtTest import QTest
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QRect, Qt
 from pet_floating import PetFloating
 
 
@@ -74,10 +75,74 @@ class FloatingTests(unittest.TestCase):
         area = self.app.primaryScreen().availableGeometry()
         pet.move(area.right() - 40, area.bottom() - 40)
         pet.show()
-        self.panel.open_for(pet)
-        QTest.qWait(25)
+        with mock.patch.object(QApplication, 'platformName', return_value='xcb'):
+            self.panel.open_for(pet)
+            QTest.qWait(25)
         self.assertTrue(area.contains(self.panel.geometry()))
         pet.hide()
+
+    def test_async_content_updates_stay_within_small_x11_screen(self):
+        area = QRect(0, 0, 500, 350)
+        screen = mock.Mock()
+        screen.availableGeometry.return_value = area
+        pet = QWidget()
+        pet.resize(60, 60)
+        pet.move(420, 280)
+        pet.show()
+        with mock.patch.object(QApplication, 'platformName', return_value='xcb'), \
+                mock.patch.object(QApplication, 'screenAt', return_value=screen):
+            self.panel.open_for(pet)
+            for update in (lambda: self.panel.set_loading(),
+                           lambda: self.panel.set_limits({'rateLimits': {
+                               'primary': {'usedPercent': 12, 'windowDurationMins': 300},
+                               'secondary': {'usedPercent': 33, 'windowDurationMins': 10080}}}),
+                           lambda: self.panel.set_weather('较长的城市名称' * 8),
+                           lambda: self.panel.set_error('天气网络查询失败' * 30)):
+                update()
+                QTest.qWait(30)
+                self.assertTrue(area.contains(self.panel.frameGeometry()), str(self.panel.frameGeometry()))
+            self.assertGreater(self.panel.scroll.verticalScrollBar().maximum(), 0)
+            self.panel.scroll.ensureWidgetVisible(self.panel.buttons['settings'])
+            QTest.qWait(20)
+            button = self.panel.buttons['settings']
+            self.assertTrue(self.panel.scroll.viewport().rect().contains(button.mapTo(self.panel.scroll.viewport(), button.rect().center())))
+        pet.hide()
+
+    def test_normal_x11_screen_has_no_scrollbar_or_clipped_controls(self):
+        screen = mock.Mock()
+        area = QRect(0, 0, 1920, 1080)
+        screen.availableGeometry.return_value = area
+        pet = QWidget()
+        pet.resize(80, 80)
+        pet.move(1820, 950)
+        pet.show()
+        with mock.patch.object(QApplication, 'platformName', return_value='xcb'), \
+                mock.patch.object(QApplication, 'screenAt', return_value=screen):
+            self.panel.set_loading()
+            self.panel.open_for(pet)
+            for update in (lambda: self.panel.set_loading(),
+                           lambda: self.panel.set_limits({'rateLimits': {
+                               'primary': {'usedPercent': 12, 'windowDurationMins': 300},
+                               'secondary': {'usedPercent': 33, 'windowDurationMins': 10080}}}),
+                           lambda: self.panel.set_weather('天气：大连 晴朗 18°C')):
+                update()
+                QTest.qWait(30)
+                self.assertTrue(area.contains(self.panel.frameGeometry()))
+                self.assertEqual(self.panel.scroll.verticalScrollBarPolicy(), Qt.ScrollBarAlwaysOff)
+                self.assertEqual(self.panel.scroll.verticalScrollBar().maximum(), 0)
+                for button in self.panel.buttons.values():
+                    center = button.mapTo(self.panel.scroll.viewport(), button.rect().center())
+                    self.assertTrue(self.panel.scroll.viewport().rect().contains(center))
+        pet.hide()
+
+    def test_wayland_never_positions_on_open_or_update(self):
+        pet = QWidget()
+        with mock.patch.object(QApplication, 'platformName', return_value='wayland'), \
+                mock.patch.object(self.panel, 'move', wraps=self.panel.move) as move:
+            self.panel.open_for(pet)
+            self.panel.set_error('出错')
+            QTest.qWait(20)
+            move.assert_not_called()
 
 
 if __name__ == '__main__':

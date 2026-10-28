@@ -87,6 +87,8 @@ class ManagerIntegrationTests(unittest.TestCase):
     def test_double_click_quota_async_and_mode_navigation(self):
         manager = self.manager
         pet = manager.dragon
+        if not pet.wayland and pet.x() >= manager.qpet.width() + 14:
+            self.assertLess(manager.qpet.frameGeometry().right(), pet.frameGeometry().left())
         QTest.mouseDClick(pet, Qt.LeftButton, pos=QPoint(100, 80))
         self.assertTrue(manager.floating.isVisible())
         panel = manager.panel

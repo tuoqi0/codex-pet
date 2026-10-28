@@ -6,15 +6,20 @@ No quota is estimated from an unrelated account or cached as a fresh result.
 import math
 from datetime import datetime
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import (
     QApplication, QFrame, QGridLayout, QHBoxLayout, QLabel, QProgressBar,
-    QPushButton, QVBoxLayout, QWidget,
+    QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
 
 
 STYLE = """
 QFrame#floatingCard { background: #fffdfd; border: 1px solid #e4def2; border-radius: 18px; }
+QScrollArea#floatingScroll { background: transparent; border: 0; }
+QScrollBar:vertical { background: transparent; width: 7px; margin: 5px 2px; }
+QScrollBar::handle:vertical { background: #cbb9de; border-radius: 2px; min-height: 22px; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
 QWidget { font-family: "Noto Sans CJK SC", "Noto Sans", sans-serif; color: #403951; font-size: 12px; }
 QLabel#title { font-size: 17px; font-weight: 700; color: #382f50; }
 QLabel#subtitle { font-size: 11px; color: #888099; }
@@ -103,11 +108,21 @@ class PetFloating(QWidget):
         self.setWindowTitle('Codex Pet 快捷面板')
         self.setStyleSheet(STYLE)
         self.setFixedWidth(320)
+        self._screen = None
+        self._fit_timer = QTimer(self)
+        self._fit_timer.setSingleShot(True)
+        self._fit_timer.timeout.connect(self._fit_to_screen)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
+        self.scroll = QScrollArea()
+        self.scroll.setObjectName('floatingScroll')
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.scroll.setFrameShape(QFrame.NoFrame)
+        outer.addWidget(self.scroll)
         card = QFrame()
         card.setObjectName('floatingCard')
-        outer.addWidget(card)
+        self.scroll.setWidget(card)
         layout = QVBoxLayout(card)
         layout.setContentsMargins(17, 15, 17, 15)
         layout.setSpacing(11)
@@ -181,12 +196,12 @@ class PetFloating(QWidget):
         self.state.setToolTip('')
         self.primary.set_window(None)
         self.secondary.set_window(None)
-        self.adjustSize()
+        self._content_changed()
 
     def set_weather(self, text, detail=''):
         self.weather.setText(text)
         self.weather.setToolTip(detail or text)
-        self.adjustSize()
+        self._content_changed()
 
     def set_error(self, message):
         text = '查询失败：' + str(message)
@@ -194,7 +209,7 @@ class PetFloating(QWidget):
         self.state.setToolTip(text)
         self.primary.set_window(None)
         self.secondary.set_window(None)
-        self.adjustSize()
+        self._content_changed()
 
     def set_limits(self, data):
         data = data if isinstance(data, dict) else {}
@@ -207,16 +222,51 @@ class PetFloating(QWidget):
         self.secondary.set_window(limit.get('secondary'))
         self.state.setText('仅显示 Codex 返回的用量' if limit else '额度不可用')
         self.state.setToolTip('')
+        self._content_changed()
+
+    def _content_changed(self):
         self.adjustSize()
+        if self.isVisible() and QApplication.platformName().lower() == 'xcb':
+            # Qt finishes text wrapping and layout activation on the next event
+            # loop iteration. Recheck then, not only before the new size lands.
+            self._fit_timer.start(0)
+
+    def _fit_to_screen(self):
+        if not self.isVisible() or QApplication.platformName().lower() != 'xcb':
+            return
+        screen = self._screen or QApplication.screenAt(self.frameGeometry().center()) or QApplication.primaryScreen()
+        if not screen:
+            return
+        area = screen.availableGeometry()
+        self.setFixedWidth(min(320, area.width()))
+        self.setMaximumHeight(area.height())
+        card = self.scroll.widget()
+        card.layout().activate()
+        # QScrollArea.sizeHint() can use the card's preferred width rather
+        # than the actual viewport width; that leaves a few pixels of false
+        # overflow on real X11. Size from the card at the assigned width.
+        content_height = max(card.sizeHint().height(), card.minimumSizeHint().height(),
+                             card.heightForWidth(self.width())) + 4
+        fits = content_height <= area.height()
+        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff if fits else Qt.ScrollBarAsNeeded)
+        self.resize(self.width(), min(content_height, area.height()))
+        frame = self.frameGeometry()
+        x = max(area.left(), min(frame.left(), area.right() - frame.width() + 1))
+        y = max(area.top(), min(frame.top(), area.bottom() - frame.height() + 1))
+        self.move(x, y)
 
     def open_for(self, pet):
         """Place near the pet on X11; Wayland owns top-level window placement."""
         self.adjustSize()
         platform = QApplication.platformName().lower()
-        if not platform.startswith('wayland'):
+        if platform == 'xcb':
             screen = QApplication.screenAt(pet.frameGeometry().center()) or pet.screen() or QApplication.primaryScreen()
             if screen:
+                self._screen = screen
                 area = screen.availableGeometry()
+                self.setFixedWidth(min(320, area.width()))
+                self.setMaximumHeight(area.height())
+                self.adjustSize()
                 pet_rect = pet.frameGeometry()
                 x = pet_rect.right() + 12
                 if x + self.width() > area.right() + 1:
@@ -227,3 +277,5 @@ class PetFloating(QWidget):
         self.show()
         self.raise_()
         self.activateWindow()
+        if platform == 'xcb':
+            self._fit_timer.start(0)

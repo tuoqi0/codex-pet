@@ -375,6 +375,13 @@ class PetManager:
         if root.exists():
             try:
                 self.qpet = QPet(self, root)
+                if not self.qpet.wayland:
+                    screen = QApplication.screenAt(self.dragon.frameGeometry().center()) or QApplication.primaryScreen()
+                    area = screen.availableGeometry()
+                    x = max(area.left(), self.dragon.x() - self.qpet.width() - 14)
+                    y = max(area.top(), min(self.dragon.y() + self.dragon.height() - self.qpet.height(),
+                                            area.bottom() - self.qpet.height() + 1))
+                    self.qpet.move(x, y)
             except (OSError, ValueError, ImportError) as exc:
                 print(f'白龍素材無法使用：{exc}', file=sys.stderr)
         else:
