@@ -75,6 +75,24 @@ class PatchTests(unittest.TestCase):
   self.assertOriginal();self.assertEqual((self.root/'webview/assets/cp-opening.css').read_bytes(),b'user edit')
   self.assertTrue((self.root/'webview/.codex-pet-opening/manifest.json').exists())
   with self.assertRaises(SystemExit): self.runpatch('remove')
+ def test_upgrade_replaces_old_assets_and_remains_reversible(self):
+  self.runpatch('install')
+  state=self.root/'webview/.codex-pet-opening'; manifest=state/'manifest.json'
+  old=b'old static dragon asset'; target=self.root/'webview/assets/cp-dragon.png';target.write_bytes(old)
+  record=json.loads(manifest.read_text());record['assets']['cp-dragon.png']=hashlib.sha256(old).hexdigest();manifest.write_text(json.dumps(record))
+  self.runpatch('upgrade')
+  self.assertEqual(target.read_bytes(),patch.ARTWORK.read_bytes())
+  self.runpatch('remove');self.assertOriginal();self.assertFalse(list((self.root/'webview/assets').iterdir()))
+ def test_upgrade_refuses_user_modified_assets_without_changing_anything(self):
+  self.runpatch('install');target=self.root/'webview/assets/cp-dragon.png';target.write_bytes(b'user edit')
+  html=(self.root/'webview/index.html').read_bytes();ext=(self.root/'out/extension.js').read_bytes()
+  with self.assertRaises(SystemExit):self.runpatch('upgrade')
+  self.assertEqual(target.read_bytes(),b'user edit');self.assertEqual((self.root/'webview/index.html').read_bytes(),html);self.assertEqual((self.root/'out/extension.js').read_bytes(),ext)
+ def test_upgrade_install_failure_leaves_original_extension(self):
+  self.runpatch('install')
+  with mock.patch.object(patch,'ARTWORK',None):
+   with self.assertRaises(SystemExit):self.runpatch('upgrade')
+  self.assertOriginal();self.assertFalse((self.root/'webview/.codex-pet-opening').exists())
  def test_version_mismatch(self):
   path=self.root/'package.json'; data=json.loads(path.read_text()); data['version']='99.0'; path.write_text(json.dumps(data))
   with self.assertRaises(SystemExit): self.runpatch('install')

@@ -6,7 +6,7 @@ VERSION='26.1007.21434'
 ORIGINALS={'webview/index.html':'0b6cd1d77fb1c374db06014ce82c829f5a58009d007188b1e742b34113d2db1f','out/extension.js':'a8069de80c8f8141481d033f94c3a95e1b59f399143cb2554d3f68469dfbe5b8'}
 ASSETS={'opening.css':'cp-opening.css','opening.js':'cp-opening.js','dragon.png':'cp-dragon.png'}
 HERE=Path(__file__).resolve().parent
-ARTWORK = next((p for p in (HERE.parent / 'assets/dragon-seated.png', HERE.parent / 'dragon-seated.png') if p.is_file()), None)
+ARTWORK = next((p for p in (HERE.parent / 'assets/opening-sprite.png', HERE.parent / 'opening-sprite.png') if p.is_file()), None)
 
 def digest(data): return hashlib.sha256(data).hexdigest()
 def atomic(path,data,mode=0o644):
@@ -30,13 +30,26 @@ def publish_asset(path, state, data):
         if os.path.exists(name): os.unlink(name)
 
 def main():
-    p=argparse.ArgumentParser(); p.add_argument('action',choices=['install','remove']); p.add_argument('extension',type=Path); args=p.parse_args()
+    p=argparse.ArgumentParser(); p.add_argument('action',choices=['install','remove','upgrade']); p.add_argument('extension',type=Path); args=p.parse_args()
     root=args.extension.resolve(strict=True)
     meta=json.loads((root/'package.json').read_text())
     if (meta.get('publisher'),meta.get('name'),meta.get('version'))!=('openai','chatgpt',VERSION): raise SystemExit('扩展身份或版本不匹配；未更改文件')
     for name in ['webview','webview/assets','out',*ORIGINALS]:
         if (root/name).is_symlink(): raise SystemExit('扩展目录包含符号链接；未更改文件')
     state=root/'webview/.codex-pet-opening'; manifest=state/'manifest.json'
+    if args.action=='upgrade':
+        # Remove validates the recorded old files before restoring their originals.
+        # If installation subsequently fails, the unmodified extension remains usable.
+        import sys
+        saved = sys.argv
+        try:
+            sys.argv = [saved[0], 'remove', str(root)]
+            main()
+            sys.argv = [saved[0], 'install', str(root)]
+            main()
+        finally:
+            sys.argv = saved
+        return
     if args.action=='install':
         originals={name:(root/name).read_bytes() for name in ORIGINALS}
         if any(digest(originals[name])!=expected for name,expected in ORIGINALS.items()) or state.exists(): raise SystemExit('原文件不匹配或已有补丁；未更改文件')

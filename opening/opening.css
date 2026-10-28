@@ -4,7 +4,7 @@
 #codex-pet-opening .cp-rings{position:absolute;width:min(95vw,60vh);aspect-ratio:1;border:1px solid #e9ddff99;border-radius:50%;box-shadow:0 0 26px #b393ff9c,inset 0 0 35px #b393ff75;animation:cp-rings 3.4s ease-out both}
 #codex-pet-opening .cp-rings:before,#codex-pet-opening .cp-rings:after{content:"";position:absolute;inset:5%;border-radius:50%;border:1px dashed #eee6ff91}
 #codex-pet-opening .cp-rings:after{inset:13%;border-style:solid;opacity:.5}
-#codex-pet-opening .cp-portrait{position:absolute;width:min(90vw,75vh);height:min(72vw,48vh);background:url('./cp-dragon.png') center/contain no-repeat;filter:drop-shadow(0 0 12px #c1a9ffbb);animation:cp-figure 3s cubic-bezier(.2,.7,.2,1) both}
+#codex-pet-opening .cp-portrait{position:absolute;width:min(90vw,75vh);aspect-ratio:462/261;background-image:url('./cp-dragon.png');background-size:800% 400%;background-position:0% 0%;background-repeat:no-repeat;filter:drop-shadow(0 0 12px #c1a9ffbb);animation:cp-figure 3s cubic-bezier(.2,.7,.2,1) both}
 #codex-pet-opening .cp-title{position:absolute;bottom:12%;font:500 12px system-ui,sans-serif;letter-spacing:.35em;color:#efe9ff;text-shadow:0 0 15px #fff;animation:cp-title 2.5s ease-out both}
 @keyframes cp-light{0%{opacity:.1;transform:scale(.6)}50%{opacity:1}100%{opacity:.82;transform:scale(1)}}
 @keyframes cp-rings{0%{opacity:0;transform:scale(.5) rotate(-25deg)}35%{opacity:.8}100%{opacity:.55;transform:scale(1) rotate(0)}}

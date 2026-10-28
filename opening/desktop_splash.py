@@ -13,10 +13,31 @@ def ease(value):
     return 1.0 - (1.0 - value) ** 3
 
 
-def asset_path():
+# The 32 frames form a 3.2-second animation: left to right, then top to bottom.
+SPRITE_COLUMNS = 8
+SPRITE_ROWS = 4
+SPRITE_WIDTH = 462
+SPRITE_HEIGHT = 261
+SPRITE_FRAME_SECONDS = .1
+
+
+def asset_path(name):
     root = Path(__file__).resolve().parent.parent
-    packaged = root / 'dragon-seated.png'
-    return packaged if packaged.is_file() else root / 'assets/dragon-seated.png'
+    packaged = root / name
+    return packaged if packaged.is_file() else root / 'assets' / name
+
+
+def sprite_geometry(width, height):
+    if width <= 0 or height <= 0 or width % SPRITE_COLUMNS or height % SPRITE_ROWS:
+        raise ValueError('无法加载开场动画素材')
+    frame_width, frame_height = width // SPRITE_COLUMNS, height // SPRITE_ROWS
+    if frame_width * SPRITE_HEIGHT != frame_height * SPRITE_WIDTH:
+        raise ValueError('无法加载开场动画素材')
+    return frame_width, frame_height
+
+
+def sprite_frame(time_elapsed):
+    return min(int(max(0.0, time_elapsed) / SPRITE_FRAME_SECONDS), SPRITE_COLUMNS * SPRITE_ROWS - 1)
 
 
 def run_opening():
@@ -31,9 +52,7 @@ def run_opening():
             geometry = QApplication.primaryScreen().availableGeometry()
             self.move(geometry.center().x() - self.width() // 2, geometry.center().y() - self.height() // 2)
             self.image = QPixmap(str(image))
-            if self.image.isNull():
-                raise ValueError('无法加载开场图片')
-            self.image = self.image.scaled(590, 330, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            self.frame_width, self.frame_height = sprite_geometry(self.image.width(), self.image.height())
             self.start = time.monotonic()
             self.timer = QTimer(self)
             self.timer.timeout.connect(self.advance)
@@ -93,8 +112,12 @@ def run_opening():
             figure = ease((t - .12) / 1.3)
             painter.setOpacity(figure)
             zoom = .84 + .16 * ease(t / 2.5)
-            w, h = self.image.width() * zoom, self.image.height() * zoom
-            painter.drawPixmap(QRectF((620 - w) / 2, (320 - h) / 2 + 7 * (1 - figure), w, h), self.image, QRectF(self.image.rect()))
+            w, h = 590 * zoom, (590 * SPRITE_HEIGHT / SPRITE_WIDTH) * zoom
+            frame = sprite_frame(t)
+            source = QRectF((frame % SPRITE_COLUMNS) * self.frame_width,
+                            (frame // SPRITE_COLUMNS) * self.frame_height,
+                            self.frame_width, self.frame_height)
+            painter.drawPixmap(QRectF((620 - w) / 2, (320 - h) / 2 + 7 * (1 - figure), w, h), self.image, source)
             painter.restore()
             # A short travelling light sweep, fading out before it crosses the title.
             if .3 < t < 2.4:
@@ -116,7 +139,7 @@ def run_opening():
             painter.drawText(QRectF(0, 321, 620, 26), Qt.AlignCenter, 'CODEX · COMPANION')
 
     app = QApplication(sys.argv[:1])
-    opening = Opening(asset_path())
+    opening = Opening(asset_path('opening-sprite.png'))
     opening.show()
     return app.exec_()
 
