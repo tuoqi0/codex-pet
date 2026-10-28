@@ -112,6 +112,16 @@ def current_weather(location, get=requests.get):
             'source': SOURCE, 'daily': data.get('daily'), 'hourly': data.get('hourly')}
 
 
+def location_day_changed(data, fetched_at, now):
+    """Whether a cached forecast was fetched on a previous location-local day."""
+    try:
+        zone = ZoneInfo(data['timezone'])
+        return (datetime.fromtimestamp(fetched_at, zone).date()
+                != datetime.fromtimestamp(now, zone).date())
+    except (KeyError, TypeError, ValueError, OverflowError, OSError, ZoneInfoNotFoundError):
+        return False
+
+
 def tomorrow_warnings(data, now=None):
     """Return (local tomorrow, forecast warnings, unavailable category names).
 

@@ -507,10 +507,15 @@ class PetManager:
         self.weather = WeatherClient()
         self.weather_generation = 0
         self.weather_due = now + 15
+        # CLOCK_MONOTONIC excludes suspend on Linux.  The wall deadline makes
+        # a refresh due immediately after a long sleep instead of showing an
+        # old forecast for another 15 minutes after resume.
+        self.weather_wall_due = time.time() + 15
         self.weather_inflight = False
         self.weather_text = '天气：未设置城市' if not settings.weather_enabled else '天气：等待查询'
         self.weather_detail = ''
         self.weather_forecast = None
+        self.weather_received_wall = None
         self.weather_seen = set()
         self.dragon = CodexPet(self)
         self.dragon.set_scale(self.window_preferences.dragon.scale)
@@ -700,10 +705,19 @@ class PetManager:
                 QTimer.singleShot(900, q_reply)
         if self.qpet:
             self.q_idle.tick(now, self.qpet.isVisible() and self._available(), self.qpet.player)
+        wall_now = time.time()
+        wall_due = wall_now >= self.weather_wall_due
+        from weather import location_day_changed
+        day_changed = (self.weather_forecast is not None and self.weather_received_wall is not None
+                       and location_day_changed(self.weather_forecast[1], self.weather_received_wall, wall_now))
+        if day_changed or (wall_due and now < self.weather_due):
+            # The machine was likely suspended or the wall clock jumped.
+            # Do not speak the pre-suspend forecast while a refresh is due.
+            self.weather_forecast = None
         self._weather_reminder(now)
         # Refresh continues during quiet hours; reminders wait until available.
         # Quiet hours, pause and active work only suppress spoken reminders.
-        if self.companion.settings.weather_enabled and now >= self.weather_due and not self.weather_inflight:
+        if self.companion.settings.weather_enabled and (now >= self.weather_due or wall_due or day_changed) and not self.weather_inflight:
             self.refresh_weather(announce=False)
 
     def refresh_weather(self, announce=True):
@@ -730,6 +744,7 @@ class PetManager:
         self.weather_inflight = True
         self.weather_announce = announce
         self.weather_due = time.monotonic() + 15 * 60
+        self.weather_wall_due = time.time() + 15 * 60
         generation = self.weather_generation
         location = {'name': settings.weather_label, 'latitude': settings.weather_latitude,
                     'longitude': settings.weather_longitude}
@@ -745,6 +760,7 @@ class PetManager:
             self.weather_text = '天气：' + summary
             self.weather_detail = f'{data["source"]} · 模型时间 {data["time"]} ({data["timezone"]})'
             self.weather_forecast = (time.monotonic(), data)
+            self.weather_received_wall = time.time()
             from weather import tomorrow_warnings
             day, warnings, missing = tomorrow_warnings(data)
             if day is None:
@@ -767,6 +783,7 @@ class PetManager:
             self.weather_text = '天气：暂时不可用'
             self.weather_detail = str(data.get('message', '天气查询失败'))
             self.weather_due = time.monotonic() + 5 * 60
+            self.weather_wall_due = time.time() + 5 * 60
         if self.floating:
             self.floating.set_weather(self.weather_text, self.weather_detail)
 
@@ -805,8 +822,10 @@ class PetManager:
         self.settings_error = None
         self.weather_generation += 1
         self.weather_forecast = None
+        self.weather_received_wall = None
         self.weather_inflight = False
         self.weather_due = time.monotonic() + 2
+        self.weather_wall_due = time.time() + 2
         self.weather_text = '天气：等待查询' if settings.weather_enabled else '天气：未启用'
         self.weather_detail = ''
         if self.floating:

@@ -1022,6 +1022,67 @@ class ManagerIntegrationTests(unittest.TestCase):
         self.assertFalse(manager.weather_announce)
         self.assertEqual(len(self.fake_weather.requests), 1)
 
+    def test_weather_refreshes_after_suspend_and_never_speaks_old_forecast(self):
+        manager = self.manager
+        settings = companion.CompanionSettings(weather_enabled=True, weather_label='Dalian',
+                                               weather_latitude=38.91, weather_longitude=121.61,
+                                               quiet_start='00:00', quiet_end='00:00')
+        with mock.patch('codex_pet.time.monotonic', return_value=1000), \
+                mock.patch('codex_pet.time.time', return_value=5000) as wall:
+            manager._save_settings(settings)
+            manager._request_weather(announce=False)
+            self.fake_weather.requests[-1][1]('weather', {'description': '晴', 'temperature': 18,
+                'temperature_unit': '°C', 'source': 'Open-Meteo', 'time': '2026-10-28T12:00',
+                'timezone': 'Asia/Shanghai'})
+            self.app.processEvents()
+            self.assertIsNotNone(manager.weather_forecast)
+            # Linux monotonic time did not advance during a simulated sleep.
+            wall.return_value = 5000 + 3600
+            with mock.patch.object(weather, 'tomorrow_warnings',
+                    return_value=('2026-10-30', {'rain': '明天有雨。'}, set())), \
+                    mock.patch.object(manager, '_available', return_value=True), \
+                    mock.patch.object(manager.dragon, 'react') as react:
+                manager.companion_tick()
+                react.assert_not_called()
+            self.assertIsNone(manager.weather_forecast)
+            self.assertEqual(len(self.fake_weather.requests), 2)
+            self.assertEqual(manager.weather_text, '天气：正在查询…')
+            self.fake_weather.requests[-1][1]('error', {'message': '网络不可用'})
+            self.app.processEvents()
+            self.assertEqual(manager.weather_text, '天气：暂时不可用')
+            self.assertEqual(manager.weather_wall_due, wall.return_value + 5 * 60)
+            manager.companion_tick()
+            self.assertEqual(len(self.fake_weather.requests), 2)
+            wall.return_value += 5 * 60
+            manager.companion_tick()
+            self.assertEqual(len(self.fake_weather.requests), 3)
+
+    def test_weather_refreshes_at_location_midnight_and_drops_yesterday_warning(self):
+        manager = self.manager
+        settings = companion.CompanionSettings(weather_enabled=True, weather_label='Dalian',
+                                               weather_latitude=38.91, weather_longitude=121.61,
+                                               quiet_start='00:00', quiet_end='00:00')
+        from datetime import timezone
+        before = datetime(2026, 10, 28, 15, 59, tzinfo=timezone.utc).timestamp()
+        with mock.patch('codex_pet.time.monotonic', return_value=1000), \
+                mock.patch('codex_pet.time.time', return_value=before) as wall:
+            manager._save_settings(settings)
+            manager._request_weather(announce=False)
+            self.fake_weather.requests[-1][1]('weather', {'description': '晴', 'temperature': 18,
+                'temperature_unit': '°C', 'source': 'Open-Meteo', 'time': '2026-10-28T23:45',
+                'timezone': 'Asia/Shanghai'})
+            self.app.processEvents()
+            wall.return_value += 120
+            with mock.patch.object(weather, 'tomorrow_warnings',
+                    return_value=('2026-10-29', {'rain': '明天有雨。'}, set())), \
+                    mock.patch.object(manager, '_available', return_value=True), \
+                    mock.patch.object(manager.dragon, 'react') as react:
+                manager.companion_tick()
+                react.assert_not_called()
+            self.assertIsNone(manager.weather_forecast)
+            self.assertEqual(len(self.fake_weather.requests), 2)
+            self.assertEqual(manager.weather_text, '天气：正在查询…')
+
     def test_weather_opt_in_results_errors_and_old_result_filter(self):
         manager = self.manager
         manager.weather_due = 0

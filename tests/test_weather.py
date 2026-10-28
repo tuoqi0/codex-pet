@@ -5,7 +5,7 @@ from unittest.mock import Mock
 
 import requests
 
-from weather import (FORECAST_URL, GEOCODING_URL, TIMEOUT, WeatherClient,
+from weather import (FORECAST_URL, GEOCODING_URL, TIMEOUT, WeatherClient, location_day_changed,
                      WeatherError, current_weather, search_locations, tomorrow_warnings)
 
 
@@ -98,6 +98,13 @@ class WeatherTests(unittest.TestCase):
         data['daily']['snowfall_sum'][1] = 0
         data['daily']['temperature_2m_max'][1] = 14
         self.assertEqual(tomorrow_warnings(data, when), ('2026-10-30', {}, {'雾', '阵风'}))
+
+    def test_local_day_rollover_uses_selected_city_timezone(self):
+        before = datetime(2026, 10, 28, 15, 59, tzinfo=timezone.utc).timestamp()
+        after = datetime(2026, 10, 28, 16, 1, tzinfo=timezone.utc).timestamp()
+        self.assertTrue(location_day_changed({'timezone': 'Asia/Shanghai'}, before, after))
+        self.assertFalse(location_day_changed({'timezone': 'America/New_York'}, before, after))
+        self.assertFalse(location_day_changed({'timezone': 'invalid'}, before, after))
 
     def test_warming_fog_and_gusts_are_forecasts_not_typhoon_claims(self):
         data = {'timezone': 'Asia/Shanghai', 'time': '2026-10-29T00:00', 'daily': {
