@@ -12,7 +12,7 @@ mkdir -p "$stage/DEBIAN" "$stage/usr/bin" "$stage/usr/share/codex-pet" \
     "$stage/usr/share/applications" "$stage/usr/share/pixmaps"
 cat > "$stage/DEBIAN/control" <<'EOF'
 Package: codex-pet
-Version: 2.14.0
+Version: 2.15.0
 Section: utils
 Priority: optional
 Architecture: all
@@ -29,6 +29,10 @@ for asset in dragon-lady.png dragon-seated.png dragon-seated-blink.png dragon-se
     install -m 644 "$base/assets/$asset" "$stage/usr/share/codex-pet/$asset"
 done
 install -m 644 "$base/assets/dragon-lady.png" "$stage/usr/share/pixmaps/codex-pet.png"
+mkdir -p "$stage/usr/share/codex-pet/opening"
+for source in "$base"/opening/patch.py "$base"/opening/opening.css "$base"/opening/opening.js; do
+    install -m 644 "$source" "$stage/usr/share/codex-pet/opening/"
+done
 cat > "$stage/usr/bin/codex-pet" <<'EOF'
 #!/bin/sh
 exec /usr/bin/python3 /usr/share/codex-pet/codex_pet.py "$@"
@@ -39,5 +43,10 @@ cat > "$stage/usr/bin/codex-pet-import" <<'EOF'
 exec /usr/bin/python3 /usr/share/codex-pet/import_bailong.py "$@"
 EOF
 chmod 755 "$stage/usr/bin/codex-pet-import"
+cat > "$stage/usr/bin/codex-pet-opening" <<'EOF'
+#!/bin/sh
+exec /usr/bin/python3 /usr/share/codex-pet/opening/patch.py "$@"
+EOF
+chmod 755 "$stage/usr/bin/codex-pet-opening"
 install -m 644 "$base/packaging/codex-pet.desktop" "$stage/usr/share/applications/"
-dpkg-deb --build --root-owner-group "$stage" "$out/codex-pet_2.14.0_all.deb"
+dpkg-deb --build --root-owner-group "$stage" "$out/codex-pet_2.15.0_all.deb"

@@ -65,6 +65,34 @@ def wave_alternate(base_path, alternate_path):
     return Image.composite(alternate, base, mask)
 
 
+# These source illustrations have a consistent pose outside the changed hand,
+# prop, or expression, but their global resampling differs.  Restrict each
+# replacement to the area containing the actual gesture so that the stationary
+# figure, tail, and wings do not jitter when an action starts or ends.
+_GESTURE_REGIONS = {
+    'wave': (.40, .21, .57, .59),
+    'tea': (.40, .21, .60, .59),
+    'happy': (.525, .15, .62, .24),
+    'work': (.40, .22, .70, .78),
+}
+
+def gesture_overlay(base_path, gesture, region):
+    with Image.open(base_path) as source:
+        base = source.convert('RGBA')
+    if isinstance(gesture, Image.Image):
+        alternate = gesture.convert('RGBA').resize(base.size, Image.Resampling.LANCZOS)
+    else:
+        with Image.open(gesture) as source:
+            alternate = source.convert('RGBA').resize(base.size, Image.Resampling.LANCZOS)
+    width, height = base.size
+    x0, y0, x1, y1 = region
+    mask = Image.new('L', base.size)
+    ImageDraw.Draw(mask).rectangle((round(width*x0), round(height*y0),
+                                    round(width*x1), round(height*y1)), fill=255)
+    mask = mask.filter(ImageFilter.GaussianBlur(max(1, round(width * .004))))
+    return Image.composite(alternate, base, mask)
+
+
 
 class CodexPet(QWidget):
     WIDTH = 480
@@ -80,14 +108,17 @@ class CodexPet(QWidget):
         self.speech = SpeechBubble()
         self.scale_factor = 0.63
         self.frames = {}
-        for pose, filename in (('idle', 'dragon-seated.png'),
-                               ('wave', 'dragon-seated-wave.png'), ('tea', 'dragon-seated-tea.png'),
-                               ('happy', 'dragon-seated-happy.png'), ('work', 'dragon-seated-work.png')):
-            self.frames[pose] = motion_frames(asset_path(filename))
+        idle_path = asset_path('dragon-seated.png')
+        self.frames['idle'] = motion_frames(idle_path)
+        for pose in ('wave', 'tea', 'happy', 'work'):
+            self.frames[pose] = motion_frames(gesture_overlay(
+                idle_path, asset_path(f'dragon-seated-{pose}.png'), _GESTURE_REGIONS[pose]))
         self.frames['blink'] = motion_frames(blink_overlay(
             asset_path('dragon-seated.png'), asset_path('dragon-seated-blink.png')))
-        self.frames['wave2'] = motion_frames(wave_alternate(
-            asset_path('dragon-seated-wave.png'), asset_path('dragon-seated-wave2.png')))
+        alternate_wave = wave_alternate(
+            asset_path('dragon-seated-wave.png'), asset_path('dragon-seated-wave2.png'))
+        self.frames['wave2'] = motion_frames(gesture_overlay(
+            idle_path, alternate_wave, _GESTURE_REGIONS['wave']))
         self.setWindowTitle('Codex Pet')
         self.setFixedSize(round(self.WIDTH * self.scale_factor), round(self.HEIGHT * self.scale_factor))
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint)
@@ -256,7 +287,7 @@ class CodexPet(QWidget):
         # Shrink slightly during the gesture to keep the wings inside the window.
         p.translate(self.WIDTH / 2, self.HEIGHT / 2 - self.drag_motion.lift)
         p.rotate(self.drag_motion.angle)
-        gesture_scale = 1.0 - self.drag_motion.lift * .006
+        gesture_scale = 1.0 - self.drag_motion.lift * .01
         p.scale(gesture_scale, gesture_scale)
         p.translate(-self.WIDTH / 2, -self.HEIGHT / 2)
 
@@ -637,7 +668,7 @@ class PetManager:
             if dragon_visible:
                 self.dragon.react(event.message, 'tea' if event.action in ('water', 'break') else 'wave')
             if self.qpet and self.qpet.isVisible() and self.qpet.player.current == 'idle':
-                animation = {'break': '14', 'water': '08', 'meal': '17', 'greeting': '20'}.get(event.action, '01')
+                animation = {'break': '01', 'water': '01', 'meal': '17', 'greeting': '20'}.get(event.action, '01')
                 if not dragon_visible:
                     self.qpet.respond(event.message, animation)
                     return
@@ -869,7 +900,8 @@ class PetManager:
 
     def user_interaction(self, source, action):
         choices = {
-            'tea': (('来，一起喝杯茶，歇一会儿。', 'tea'), ('我也陪你喝茶！', '14')),
+            'tea': (('来，一起喝杯茶，歇一会儿。', 'tea'), ('我来准备茶点！', '17')),
+            'rest': (('闭上眼睛，一起休息一会儿。', 'blink'), ('我也要打个小盹。', '14')),
             'encourage': (('你已经做得很好了，我们慢慢来。', 'wave'), ('加油！我相信你！', '20')),
             'happy': (('开心一下，让我陪着你！', 'happy'), ('一起开心！', '18')),
         }
@@ -917,8 +949,8 @@ class PetManager:
                 ('小白龙，一起加油！', '好呀，一起！', 'wave', '01'),
                 ('今天也有你陪伴呢。', '我在这里！', 'happy', '20'),
                 ('准备好一起出发了吗？', '准备好了！', 'wave', '04'),
-                ('小白龙，我们一起陪伴主人吧。', '嗯！今天也要开开心心。', 'wave', '25'),
-                ('累的时候可以歇一歇哦。', '我们一起休息吧！', 'tea', '14'),
+                ('小白龙，我们一起陪伴主人吧。', '嗯！今天也要开开心心。', 'wave', '20'),
+                ('累的时候可以歇一歇哦。', '我来准备点心！', 'tea', '17'),
                 ('小白龙，你今天心情如何？', '看到大家就很开心！', 'happy', '20'),
                 ('我们给主人一点鼓励吧。', '你已经做得很好啦！', 'wave', '01'),
             ))
@@ -936,7 +968,7 @@ class PetManager:
             greeting, reply, animation, pose = self.dragon.behavior.rng.choice((
                 ('龙姐姐，你在忙什么呀？', '在这里陪你，一起慢慢来。', '01', 'happy'),
                 ('我们一起给主人加油吧！', '好呀，你做得很好哦。', '20', 'wave'),
-                ('想和你一起喝茶！', '来，我们歇一小会儿。', '14', 'tea'),
+                ('喝茶配点心，我来准备！', '来，我们歇一小会儿。', '17', 'tea'),
                 ('今天也有大家一起，真开心。', '嗯，我也很高兴！', '04', 'happy'),
             ))
             animation = animation if animation in self.qpet.player.entries else '01'
@@ -960,7 +992,8 @@ class PetManager:
     def populate_menu(self, menu, current):
         menu.addSeparator()
         interactions = menu.addMenu('一起互动')
-        for label, action in (('一起喝茶', 'tea'), ('给我鼓励', 'encourage'), ('开心一下', 'happy')):
+        for label, action in (('一起喝茶', 'tea'), ('一起小憩', 'rest'),
+                              ('给我鼓励', 'encourage'), ('开心一下', 'happy')):
             interactions.addAction(label, lambda checked=False, value=action: self.user_interaction(current, value))
         menu.addAction('对话与任务', lambda: self.open_panel('chat'))
         menu.addAction('查看额度', lambda: self.open_panel('limits'))

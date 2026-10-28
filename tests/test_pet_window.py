@@ -87,18 +87,32 @@ class WindowTests(unittest.TestCase):
         self.assertLess(self.pet.drag_motion.lift, .1)
 
     def test_drag_extreme_tilts_do_not_clip_artwork(self):
+        # Hold the animation clock fixed.  The tail reaches the bottom edge in
+        # phases 21–23 at +9 degrees in the uncorrected implementation; random
+        # clock sampling misses that fault most of the time.
         self.pet.timer.stop()
-        for angle in (-self.pet.drag_motion.MAX_ANGLE, self.pet.drag_motion.MAX_ANGLE):
-            with self.subTest(angle=angle):
-                self.pet.drag_motion.angle = angle
-                self.pet.drag_motion.lift = self.pet.drag_motion.LIFT
-                image = self.pet.grab().toImage()
-                width, height = image.width(), image.height()
-                edges = ([(x, 0) for x in range(width)] +
-                         [(x, height - 1) for x in range(width)] +
-                         [(0, y) for y in range(height)] +
-                         [(width - 1, y) for y in range(height)])
-                self.assertTrue(all(qAlpha(image.pixel(x, y)) == 0 for x, y in edges))
+        self.pet.drag_motion.lift = self.pet.drag_motion.LIFT
+        for scale in (.63 * .75, .63, .63 * 1.25):
+            self.pet.set_scale(scale)
+            for pose in self.pet.frames:
+                with mock.patch.object(self.pet.behavior, 'pose', return_value=pose):
+                    for angle in (-self.pet.drag_motion.MAX_ANGLE, self.pet.drag_motion.MAX_ANGLE):
+                        self.pet.drag_motion.angle = angle
+                        for phase in range(24):
+                            # Cover different bob positions as well as the 24
+                            # deformation frames; the cycles are asynchronous.
+                            for cycle in range(4):
+                                now = 1000 + phase * .1 + cycle * 2.4
+                                with self.subTest(scale=scale, pose=pose, angle=angle,
+                                                  phase=phase, cycle=cycle), \
+                                     mock.patch('codex_pet.time.monotonic', return_value=now):
+                                    image = self.pet.grab().toImage()
+                                    width, height = image.width(), image.height()
+                                    edges = ([(x, 0) for x in range(width)] +
+                                             [(x, height - 1) for x in range(width)] +
+                                             [(0, y) for y in range(height)] +
+                                             [(width - 1, y) for y in range(height)])
+                                    self.assertTrue(all(qAlpha(image.pixel(x, y)) == 0 for x, y in edges))
 
     def test_drag_cancels_a_pending_single_click(self):
         pos = QPoint(160, 100)

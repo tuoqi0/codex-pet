@@ -14,7 +14,7 @@ from PyQt5.QtGui import QImage, QPainter, qAlpha
 from PyQt5.QtWidgets import QApplication
 
 import dragon_motion
-from codex_pet import blink_overlay
+from codex_pet import blink_overlay, gesture_overlay, wave_alternate, _GESTURE_REGIONS
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -92,6 +92,40 @@ class DragonMotionTests(unittest.TestCase):
                     baseline = render(frames[0]).crop(area).tobytes()
                     for frame in (frames[6], frames[12], frames[18]):
                         self.assertEqual(render(frame).crop(area).tobytes(), baseline)
+
+    def test_gestures_change_only_the_figure_region_they_affect(self):
+        base = ROOT / 'assets/dragon-seated.png'
+        cases = {
+            'wave': ('dragon-seated-wave.png', (119, 46, 175, 113)),
+            'tea': ('dragon-seated-tea.png', (119, 46, 184, 113)),
+            'happy': ('dragon-seated-happy.png', (153, 37, 188, 60)),
+            'work': ('dragon-seated-work.png', (119, 46, 211, 142)),
+        }
+        for pose, (filename, (left, top, right, bottom)) in cases.items():
+            images = dragon_motion.motion_frames(gesture_overlay(
+                base, ROOT / 'assets' / filename, _GESTURE_REGIONS[pose]))
+            for i in (0, 6, 12, 18):
+                diff = ImageChops.difference(self.renders[i], render(images[i]))
+                changed = diff.convert('RGB').getbbox()
+                self.assertIsNotNone(changed, pose)
+                self.assertGreaterEqual(changed[0], left, pose)
+                self.assertGreaterEqual(changed[1], top, pose)
+                self.assertLessEqual(changed[2], right, pose)
+                self.assertLessEqual(changed[3], bottom, pose)
+
+    def test_alternate_wave_preserves_the_same_base_figure(self):
+        base = ROOT / 'assets/dragon-seated.png'
+        alternate = wave_alternate(ROOT / 'assets/dragon-seated-wave.png',
+                                   ROOT / 'assets/dragon-seated-wave2.png')
+        images = dragon_motion.motion_frames(gesture_overlay(
+            base, alternate, _GESTURE_REGIONS['wave']))
+        for i in (0, 6, 12, 18):
+            changed = ImageChops.difference(self.renders[i], render(images[i])).convert('RGB').getbbox()
+            self.assertIsNotNone(changed)
+            self.assertGreaterEqual(changed[0], 119)
+            self.assertGreaterEqual(changed[1], 46)
+            self.assertLessEqual(changed[2], 175)
+            self.assertLessEqual(changed[3], 113)
 
     def test_wings_and_tail_move_visibly_at_default_size(self):
         phases = [self.renders[index] for index in (0, 6, 12, 18)]

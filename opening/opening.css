@@ -1,0 +1,22 @@
+#codex-pet-opening{position:fixed;inset:0;z-index:2147483000;overflow:hidden;display:grid;place-items:center;background:#111024;opacity:1;transition:opacity .46s ease;cursor:pointer;isolation:isolate}
+#codex-pet-opening.cp-fade{opacity:0;pointer-events:none}
+#codex-pet-opening:before{content:"";position:absolute;inset:-30%;background:radial-gradient(ellipse at 52% 50%,#d3c2ff 0%,#7561ba 16%,#292142 40%,#111024 68%);animation:cp-light 3s ease-out both}
+#codex-pet-opening .cp-rings{position:absolute;width:min(95vw,60vh);aspect-ratio:1;border:1px solid #e9ddff99;border-radius:50%;box-shadow:0 0 26px #b393ff9c,inset 0 0 35px #b393ff75;animation:cp-rings 3.4s ease-out both}
+#codex-pet-opening .cp-rings:before,#codex-pet-opening .cp-rings:after{content:"";position:absolute;inset:5%;border-radius:50%;border:1px dashed #eee6ff91}
+#codex-pet-opening .cp-rings:after{inset:13%;border-style:solid;opacity:.5}
+#codex-pet-opening .cp-portrait{position:absolute;width:min(90vw,75vh);height:min(72vw,48vh);background:url('./cp-dragon.png') center/contain no-repeat;filter:drop-shadow(0 0 12px #c1a9ffbb);animation:cp-figure 3s cubic-bezier(.2,.7,.2,1) both}
+#codex-pet-opening .cp-title{position:absolute;bottom:12%;font:500 12px system-ui,sans-serif;letter-spacing:.35em;color:#efe9ff;text-shadow:0 0 15px #fff;animation:cp-title 2.5s ease-out both}
+@keyframes cp-light{0%{opacity:.1;transform:scale(.6)}50%{opacity:1}100%{opacity:.82;transform:scale(1)}}
+@keyframes cp-rings{0%{opacity:0;transform:scale(.5) rotate(-25deg)}35%{opacity:.8}100%{opacity:.55;transform:scale(1) rotate(0)}}
+@keyframes cp-figure{0%{opacity:0;transform:scale(.76) translateY(8%);filter:blur(12px) brightness(2)}40%{opacity:.8}100%{opacity:1;transform:scale(1) translateY(0);filter:drop-shadow(0 0 12px #c1a9ffbb)}}
+@keyframes cp-title{0%,45%{opacity:0;letter-spacing:.7em}100%{opacity:.9;letter-spacing:.35em}}
+@media (prefers-reduced-motion:reduce){#codex-pet-opening:before,#codex-pet-opening .cp-rings,#codex-pet-opening .cp-portrait,#codex-pet-opening .cp-title{animation:none}}
+
+#codex-pet-opening {display:none}
+#codex-pet-opening .cp-beam{position:absolute;width:24%;height:150%;top:-25%;left:-40%;transform:rotate(27deg);background:linear-gradient(90deg,transparent,#f7edff66,#fff9,#ebdaff66,transparent);filter:blur(8px);mix-blend-mode:screen;pointer-events:none;animation:cp-sweep 2.1s .35s cubic-bezier(.2,.5,.3,1) both}
+#codex-pet-opening .cp-sparks{position:absolute;inset:0;pointer-events:none}
+#codex-pet-opening .cp-sparks i{position:absolute;width:4px;height:4px;border-radius:50%;background:#fff;box-shadow:0 0 9px 3px #d9c6ff;animation:cp-spark 2.5s ease-out both}
+#codex-pet-opening .cp-sparks i:nth-child(1){left:23%;top:30%;animation-delay:.1s}#codex-pet-opening .cp-sparks i:nth-child(2){left:72%;top:27%;animation-delay:.3s}#codex-pet-opening .cp-sparks i:nth-child(3){left:15%;top:58%;animation-delay:.5s}#codex-pet-opening .cp-sparks i:nth-child(4){left:80%;top:61%;animation-delay:.2s}#codex-pet-opening .cp-sparks i:nth-child(5){left:47%;top:20%;animation-delay:.6s}#codex-pet-opening .cp-sparks i:nth-child(6){left:63%;top:70%;animation-delay:.4s}
+@keyframes cp-sweep{0%{opacity:0;left:-40%}15%{opacity:.8}80%{opacity:.7}100%{opacity:0;left:120%}}
+@keyframes cp-spark{0%{opacity:0;transform:translateY(24px) scale(.4)}35%{opacity:1;transform:translateY(0) scale(1)}100%{opacity:.15;transform:translateY(-18px) scale(.5)}}
+@media (prefers-reduced-motion:reduce){#codex-pet-opening .cp-beam,#codex-pet-opening .cp-sparks i{animation:none;display:none}#codex-pet-opening{transition:none}}

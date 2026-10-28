@@ -343,7 +343,8 @@ class ManagerIntegrationTests(unittest.TestCase):
                 next(action for action in submenu.actions() if action.text() == self.wanted).trigger()
 
         for source in (manager.dragon, manager.qpet):
-            for label, pose, animation in (('一起喝茶', 'tea', '14'), ('给我鼓励', 'wave', '20'),
+            for label, pose, animation in (('一起喝茶', 'tea', '17'), ('一起小憩', 'blink', '14'),
+                                           ('给我鼓励', 'wave', '20'),
                                            ('开心一下', 'happy', '18')):
                 with self.subTest(source=source.windowTitle(), action=label):
                     TestMenu.wanted = label
@@ -363,6 +364,57 @@ class ManagerIntegrationTests(unittest.TestCase):
                     self.assertTrue(manager.qpet.speech.isVisible())
                     self.assertEqual(manager.dragon.behavior.reaction_pose, pose)
                     self.assertEqual(manager.qpet.player.current, animation)
+
+    def test_rest_menu_reacts_from_each_pet_with_real_delayed_reply(self):
+        manager = self.manager
+        frames = [Image.new('RGBA', (10, 10), color) for color in ('red', 'blue')]
+        frames[0].save(manager.qpet.player.root / 'rest.webp', save_all=True,
+                       append_images=frames[1:], duration=2000, loop=0)
+        manager.qpet.player.entries['14']['file'] = 'rest.webp'
+        class RestMenu(codex_pet.QMenu):
+            def exec_(self, _position):
+                submenu = next(action.menu() for action in self.actions() if action.text() == '一起互动')
+                next(action for action in submenu.actions() if action.text() == '一起小憩').trigger()
+
+        for source in (manager.dragon, manager.qpet):
+            with self.subTest(source=source.windowTitle()), mock.patch.object(codex_pet, 'QMenu', RestMenu):
+                manager.dragon.speech.hide()
+                manager.qpet.speech.hide()
+                manager.dragon.behavior.reaction_until = 0
+                manager.qpet.player.play('idle')
+                source.contextMenuEvent(QContextMenuEvent(QContextMenuEvent.Mouse, QPoint(70, 70)))
+                QTest.qWait(1050)
+                self.assertEqual(manager.dragon.behavior.pose(codex_pet.time.monotonic()), 'blink')
+                self.assertEqual(manager.qpet.player.current, '14')
+                self.assertEqual(manager.dragon.behavior.message, '闭上眼睛，一起休息一会儿。')
+                self.assertEqual(manager.qpet.message, '我也要打个小盹。')
+                self.assertTrue(manager.dragon.speech.isVisible())
+                self.assertTrue(manager.qpet.speech.isVisible())
+
+    def test_rest_during_work_or_with_hidden_partner_preserves_existing_state(self):
+        manager = self.manager
+        manager.play_action('work')
+        for source in (manager.dragon, manager.qpet):
+            with self.subTest(source=source.windowTitle()):
+                manager.user_interaction(source, 'rest')
+                QTest.qWait(1050)
+                self.assertEqual(manager.dragon.behavior.pose(codex_pet.time.monotonic()), 'work')
+                self.assertEqual(manager.qpet.player.current, 'work02')
+                self.assertTrue(manager.dragon.speech.isVisible())
+                self.assertTrue(manager.qpet.speech.isVisible())
+        manager.play_action('idle')
+        manager.qpet.hide()
+        manager.user_interaction(manager.dragon, 'rest')
+        QTest.qWait(1050)
+        self.assertEqual(manager.dragon.behavior.pose(codex_pet.time.monotonic()), 'blink')
+        self.assertFalse(manager.qpet.speech.isVisible())
+        manager.qpet.show()
+        manager.dragon.hide()
+        manager.user_interaction(manager.qpet, 'rest')
+        QTest.qWait(1050)
+        self.assertEqual(manager.qpet.message, '我也要打个小盹。')
+        self.assertFalse(manager.dragon.speech.isVisible())
+        manager.dragon.show()
 
     def test_explicit_interactions_keep_work_animations_and_ignore_hidden_partner(self):
         manager = self.manager
@@ -421,7 +473,7 @@ class ManagerIntegrationTests(unittest.TestCase):
                 source.contextMenuEvent(QContextMenuEvent(QContextMenuEvent.Mouse, QPoint(70, 70)))
                 self.assertFalse(source.click_timer.isActive())
                 expected = ('来，一起喝杯茶，歇一会儿。' if source is manager.dragon
-                            else '我也陪你喝茶！')
+                            else '我来准备茶点！')
                 serial = source.reaction_serial
                 QTest.qWait(max(1000, QApplication.doubleClickInterval() + 150))
                 self.assertEqual(source.reaction_serial, serial)
@@ -473,6 +525,30 @@ class ManagerIntegrationTests(unittest.TestCase):
                 self.assertTrue(pet.drag_moved)
                 self.assertFalse(pet.speech.isVisible())
                 QTest.mouseRelease(pet, Qt.LeftButton, pos=moved)
+
+    def test_tea_conversations_use_the_snack_animation_for_both_speakers(self):
+        manager = self.manager
+        manager.dragon.move(20, 100)
+        manager.qpet.move(260, 100)
+        for speaker in ('dragon', 'qpet'):
+            with self.subTest(speaker=speaker), mock.patch.object(codex_pet.QTimer, 'singleShot') as delayed:
+                manager.dragon.behavior.reaction_until = 0
+                manager.dragon.speech.hide()
+                manager.qpet.speech.hide()
+                manager.qpet.player.play('idle')
+                manager.next_interaction_speaker = speaker
+                manager.next_interaction = 0
+                # Choose the scripted conversation mentioning tea.
+                with mock.patch.object(manager.dragon.behavior.rng, 'choice',
+                                       side_effect=lambda options: next(x for x in options if '茶' in x[0] or '歇' in x[0])):
+                    manager.maybe_interact()
+                if speaker == 'dragon':
+                    delayed.call_args.args[1]()
+                self.assertEqual(manager.qpet.player.current, '17')
+                self.assertIn('点心', manager.qpet.message)
+                if speaker == 'qpet':
+                    delayed.call_args.args[1]()
+                    self.assertEqual(manager.dragon.behavior.reaction_pose, 'tea')
 
     def test_automatic_conversation_bubbles_do_not_overlap(self):
         manager = self.manager
@@ -813,7 +889,7 @@ class ManagerIntegrationTests(unittest.TestCase):
                 mock.patch.object(codex_pet.QTimer, 'singleShot') as delayed:
             manager.companion_tick()
             self.assertEqual(manager.dragon.behavior.message, event.message)
-            play.assert_any_call('08')
+            play.assert_any_call('01')
             delayed.call_args.args[1]()
             self.assertTrue(manager.qpet.message)
         manager.dragon.hide()
@@ -823,7 +899,7 @@ class ManagerIntegrationTests(unittest.TestCase):
         with mock.patch.object(manager.companion, 'tick', return_value=event), \
                 mock.patch.object(manager.qpet, 'respond', wraps=manager.qpet.respond) as respond:
             manager.companion_tick()
-            respond.assert_called_once_with(event.message, '08')
+            respond.assert_called_once_with(event.message, '01')
             self.assertEqual(manager.qpet.message, event.message)
 
     def test_delayed_reminder_reply_does_not_override_new_user_interaction(self):
@@ -931,7 +1007,7 @@ class ManagerIntegrationTests(unittest.TestCase):
                 clock.return_value = 1000 + elapsed
                 manager.companion_tick()
             respond.assert_called_once()
-            self.assertEqual(respond.call_args.args[1], '08')
+            self.assertEqual(respond.call_args.args[1], '01')
             self.assertTrue(manager.qpet.message)
 
     def test_weather_opt_in_results_errors_and_old_result_filter(self):
