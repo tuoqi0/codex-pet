@@ -94,7 +94,7 @@ def dragon_outline(widget):
     painter.setRenderHint(QPainter.SmoothPixmapTransform)
     for frames in widget.frames.values():
         # Sample the extrema of the 24-frame deformation so the region keeps
-        # covering the moving wing and tail throughout the cycle.
+        # covering the moving wings throughout the cycle.
         for frame in frames[::6]:
             bounds = frame.size().scaled(470, 266, Qt.KeepAspectRatio)
             x, y = (widget.WIDTH - bounds.width()) / 2, (widget.HEIGHT - bounds.height()) / 2

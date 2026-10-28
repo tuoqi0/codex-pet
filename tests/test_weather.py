@@ -1,11 +1,12 @@
 import threading
+from datetime import datetime, timezone
 import unittest
 from unittest.mock import Mock
 
 import requests
 
 from weather import (FORECAST_URL, GEOCODING_URL, TIMEOUT, WeatherClient,
-                     WeatherError, current_weather, search_locations)
+                     WeatherError, current_weather, search_locations, tomorrow_warnings)
 
 
 class Response:
@@ -80,6 +81,68 @@ class WeatherTests(unittest.TestCase):
         self.assertEqual(seen[1][0], 'error')
         self.assertEqual(seen[1][1]['operation'], 'weather')
         self.assertEqual(get.call_count, 1)
+
+    def test_tomorrow_uses_location_date_and_detects_each_weather_change(self):
+        data = {'timezone': 'Asia/Shanghai', 'time': '2026-10-29T00:00', 'daily': {
+            'time': ['2026-10-29', '2026-10-30'],
+            'temperature_2m_max': [18, 12], 'rain_sum': [0, 1],
+            'showers_sum': [0, 0], 'snowfall_sum': [0, 0.2]}}
+        when = datetime(2026, 10, 28, 16, 5, tzinfo=timezone.utc)
+        date, warnings, missing = tomorrow_warnings(data, when)
+        self.assertEqual(date, '2026-10-30')
+        self.assertEqual(set(warnings), {'cold', 'rain', 'snow'})
+        self.assertIn('低 6°C', warnings['cold'])
+        self.assertIn('预报有雨', warnings['rain'])
+        self.assertIn('预报有雪', warnings['snow'])
+        data['daily']['rain_sum'][1] = 0
+        data['daily']['snowfall_sum'][1] = 0
+        data['daily']['temperature_2m_max'][1] = 14
+        self.assertEqual(tomorrow_warnings(data, when), ('2026-10-30', {}, {'雾', '阵风'}))
+
+    def test_warming_fog_and_gusts_are_forecasts_not_typhoon_claims(self):
+        data = {'timezone': 'Asia/Shanghai', 'time': '2026-10-29T00:00', 'daily': {
+            'time': ['2026-10-29', '2026-10-30'], 'temperature_2m_max': [18, 24],
+            'rain_sum': [0, 0], 'showers_sum': [0, 0], 'snowfall_sum': [0, 0],
+            'wind_gusts_10m_max': [20, 75]}, 'hourly': {
+            'time': ['2026-10-29T22:00', '2026-10-30T08:00'], 'weather_code': [48, 45]}}
+        day, warnings, missing = tomorrow_warnings(data, datetime(2026, 10, 28, 16, 5, tzinfo=timezone.utc))
+        self.assertEqual(day, '2026-10-30')
+        self.assertEqual(set(warnings), {'hot', 'fog', 'wind'})
+        self.assertIn('预计', warnings['wind'])
+        self.assertNotIn('台风', warnings['wind'])
+        data['hourly']['weather_code'] = [45, 0]
+        data['daily']['wind_gusts_10m_max'][1] = 61.9
+        self.assertEqual(set(tomorrow_warnings(data, datetime(2026, 10, 28, 16, 5, tzinfo=timezone.utc))[1]), {'hot'})
+
+    def test_stale_future_and_incomplete_forecasts_do_not_warn(self):
+        data = {'timezone': 'Asia/Shanghai', 'time': '2026-10-29T00:00', 'daily': {
+            'time': ['2026-10-29', '2026-10-30'], 'temperature_2m_max': [18, 12],
+            'rain_sum': [0, 1], 'showers_sum': [0, 0], 'snowfall_sum': [0, 0]}}
+        for when in (datetime(2026, 10, 28, 19, 0, tzinfo=timezone.utc),
+                     datetime(2026, 10, 28, 15, 0, tzinfo=timezone.utc)):
+            self.assertEqual(tomorrow_warnings(data, when), (None, {}, set()))
+        del data['daily']['rain_sum']
+        day, warnings, missing = tomorrow_warnings(data, datetime(2026, 10, 28, 16, 5, tzinfo=timezone.utc))
+        self.assertEqual(day, '2026-10-30')
+        self.assertEqual(set(warnings), {'cold'})
+        self.assertIn('雨量', missing)
+
+    def test_partial_data_preserves_independently_supported_alerts(self):
+        when = datetime(2026, 10, 28, 16, 5, tzinfo=timezone.utc)
+        data = {'timezone': 'Asia/Shanghai', 'time': '2026-10-29T00:00', 'daily': {
+            'time': ['2026-10-30'], 'rain_sum': [2], 'snowfall_sum': [1],
+            'wind_gusts_10m_max': [80]}, 'hourly': {
+            'time': ['2026-10-30T08:00'], 'weather_code': [45]}}
+        day, warnings, missing = tomorrow_warnings(data, when)
+        self.assertEqual(day, '2026-10-30')
+        self.assertEqual(set(warnings), {'rain', 'snow', 'wind', 'fog'})
+        self.assertEqual(missing, {'气温', '雨量', '雾'})
+        data['daily'] = None
+        day, warnings, missing = tomorrow_warnings(data, when)
+        self.assertEqual(set(warnings), {'fog'})
+        self.assertEqual(missing, {'气温', '雨量', '雪量', '阵风', '雾'})
+        data['hourly']['weather_code'] = [None]
+        self.assertEqual(tomorrow_warnings(data, when)[1], {})
 
     def test_failures_explain_network_timeout_and_rate_limit(self):
         location = {'latitude': 38.91, 'longitude': 121.61}

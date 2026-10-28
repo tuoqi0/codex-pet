@@ -29,6 +29,7 @@ class CompanionSettings:
     lunch_time: str = '12:00'
     dinner_time: str = '18:30'
     weather_enabled: bool = False
+    weather_alerts: bool = True
     weather_label: str = ''
     weather_latitude: float | None = None
     weather_longitude: float | None = None
@@ -44,7 +45,7 @@ class CompanionSettings:
         return result
 
     def validate(self):
-        for key in ('enabled', 'breaks', 'water', 'meals', 'greetings', 'weather_enabled'):
+        for key in ('enabled', 'breaks', 'water', 'meals', 'greetings', 'weather_enabled', 'weather_alerts'):
             if not isinstance(getattr(self, key), bool):
                 raise ValueError(f'{key} 必须是布林值')
         for key in ('break_minutes', 'water_minutes', 'greeting_minutes'):

@@ -228,12 +228,16 @@ class AppServer:
         self.event_lock = threading.RLock()
         self.queued_server_requests = set()
         self.resolved_queued_requests = set()
+        self.queued_request_details = {}
+        self.queued_request_serial = 0
+        self.read_item_details = OrderedDict()
+        self.stale_queued_requests = set()
         self.reader_closed = False
         self.completed_turns = {}
         self.mode = None
         threading.Thread(target=self._read, daemon=True).start()
         try:
-            self.request('initialize', {'clientInfo': {'name': 'codex_pet', 'title': 'Codex Pet', 'version': '2.18.0'}, 'capabilities': {'experimentalApi': True}})
+            self.request('initialize', {'clientInfo': {'name': 'codex_pet', 'title': 'Codex Pet', 'version': '2.19.0'}, 'capabilities': {'experimentalApi': True}})
             self.write({'method': 'initialized', 'params': {}})
         except Exception:
             self.close()
@@ -246,15 +250,71 @@ class AppServer:
                     event = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if event.get('method') == 'serverRequest/resolved':
-                    # Invalidate as soon as the reader receives the notification;
-                    # otherwise the GUI can approve while the event waits in the queue.
+                method = event.get('method')
+                params = event.get('params') or {}
+                if method == 'serverRequest/resolved':
+                    # Resolve immediately so a queued GUI event cannot approve it.
                     self.handle(event)
                     continue
-                if 'id' in event and event.get('method'):
-                    key = ((event.get('params') or {}).get('threadId'), event['id'])
-                    with self.event_lock:
-                        self.queued_server_requests.add(key)
+                with self.event_lock:
+                    if 'id' in event and method:
+                        key = (params.get('threadId'), event['id'])
+                        self.queued_request_serial += 1
+                        token = self.queued_request_serial
+                        event['_pet_queue_token'] = token
+                        self.queued_server_requests.add(token)
+                        item_key = self._patch_key(params)
+                        snapshot = self.read_item_details.get((method, item_key))
+                        self.queued_request_details[token] = (key, method, params, snapshot)
+                    elif method in ('item/fileChange/patchUpdated', 'item/started', 'item/completed'):
+                        item = params.get('item') if method != 'item/fileChange/patchUpdated' else None
+                        kind = item.get('type') if isinstance(item, dict) else 'fileChange'
+                        request_method = {'fileChange': 'item/fileChange/requestApproval',
+                                          'commandExecution': 'item/commandExecution/requestApproval'}.get(kind)
+                        item_id = item.get('id') if isinstance(item, dict) else None
+                        item_key = self._patch_key(params, item_id)
+                        if request_method and item_key is not None:
+                            terminal = method == 'item/completed'
+                            cache_key = (request_method, item_key)
+                            if terminal:
+                                self.read_item_details.pop(cache_key, None)
+                                updated = None
+                            elif kind == 'commandExecution':
+                                updated = self._validated_command(item)
+                            else:
+                                changes = params.get('changes') if item is None else item.get('changes')
+                                updated = self._validated_patch(changes)
+                            if not terminal:
+                                self.read_item_details[cache_key] = updated
+                                self.read_item_details.move_to_end(cache_key)
+                                while len(self.read_item_details) > MAX_APPROVAL_PATCH_ITEMS:
+                                    self.read_item_details.popitem(last=False)
+                            for token, (_, queued_method, request_params, snapshot) in self.queued_request_details.items():
+                                if (queued_method == request_method and self._patch_key(request_params) == item_key
+                                        and (terminal or snapshot != updated)):
+                                    (self.resolved_queued_requests if terminal else self.stale_queued_requests).add(token)
+                            snapshots = (self.pending_command_snapshots if kind == 'commandExecution'
+                                         else self.pending_patch_snapshots)
+                            for request_id, (pending_method, request_params) in list(self.pending_approvals.items()):
+                                if (pending_method == request_method and self._patch_key(request_params) == item_key
+                                        and (terminal or snapshots.get(request_id) != updated)):
+                                    if not terminal:
+                                        self._deny_changed_request(request_id, pending_method, request_params)
+                                    self._invalidate_approval(request_id, request_params.get('threadId'))
+                    elif method == 'turn/completed':
+                        thread_id = params.get('threadId')
+                        turn = params.get('turn') or {}
+                        turn_id = turn.get('id') if isinstance(turn, dict) else None
+                        if thread_id and turn_id:
+                            for cache_key in list(self.read_item_details):
+                                if cache_key[1][:2] == (thread_id, turn_id):
+                                    del self.read_item_details[cache_key]
+                            for token, (_, _, request_params, _) in self.queued_request_details.items():
+                                if (request_params.get('threadId'), request_params.get('turnId')) == (thread_id, turn_id):
+                                    self.resolved_queued_requests.add(token)
+                            for request_id, (_, request_params) in list(self.pending_approvals.items()):
+                                if (request_params.get('threadId'), request_params.get('turnId')) == (thread_id, turn_id):
+                                    self._invalidate_approval(request_id, thread_id)
                 self.events.put(event)
         finally:
             with self.event_lock:
@@ -319,9 +379,8 @@ class AppServer:
         key = (params.get('threadId'), params.get('turnId'), item_id if item_id is not None else params.get('itemId'))
         return key if all(isinstance(value, str) and value for value in key) else None
 
-    def _remember_patch(self, key, changes):
-        if key is None:
-            return
+    @staticmethod
+    def _validated_patch(changes):
         # Invalid or oversized changes are marked unavailable, never partially presented as complete.
         checked = []
         size = 0
@@ -348,6 +407,20 @@ class AppServer:
                 checked.append({'path': change['path'], 'kind': safe_kind, 'diff': change['diff']})
         else:
             checked = None
+        return checked
+
+    @staticmethod
+    def _validated_command(item):
+        command, cwd = item.get('command'), item.get('cwd')
+        if (isinstance(command, str) and command and len(command) <= MAX_APPROVAL_PATCH_CHARS
+                and isinstance(cwd, str) and cwd and len(cwd) <= MAX_APPROVAL_PATCH_CHARS):
+            return {'command': command, 'cwd': cwd}
+        return None
+
+    def _remember_patch(self, key, changes):
+        if key is None:
+            return
+        checked = self._validated_patch(changes)
         patches = getattr(self, 'file_change_patches', None)
         if patches is None:
             patches = self.file_change_patches = OrderedDict()
@@ -369,13 +442,21 @@ class AppServer:
         if 'id' in event and method:
             request_id = event['id']
             key = (params.get('threadId'), request_id)
-            getattr(self, 'queued_server_requests', set()).discard(key)
+            token = event.pop('_pet_queue_token', None)
+            getattr(self, 'queued_server_requests', set()).discard(token)
+            getattr(self, 'queued_request_details', {}).pop(token, None)
+            stale = getattr(self, 'stale_queued_requests', set())
+            was_stale = token in stale
+            stale.discard(token)
             resolved = getattr(self, 'resolved_queued_requests', set())
-            if key in resolved:
-                resolved.discard(key)
+            if token in resolved:
+                resolved.discard(token)
                 return method
             if (getattr(self, 'reader_closed', False) or
                     getattr(self, 'stop_event', None) and self.stop_event.is_set()):
+                return method
+            if was_stale:
+                self._deny_changed_request(request_id, method, params)
                 return method
             if method in ('item/commandExecution/requestApproval', 'item/fileChange/requestApproval',
                           'item/permissions/requestApproval', 'item/tool/requestUserInput'):
@@ -414,8 +495,9 @@ class AppServer:
                 self.emit('status', '不支持的 Codex 请求已拒绝：' + method)
         elif method == 'serverRequest/resolved':
             key = (params.get('threadId'), params.get('requestId'))
-            if key in getattr(self, 'queued_server_requests', set()):
-                self.resolved_queued_requests.add(key)
+            for token, (queued_key, _, _, _) in getattr(self, 'queued_request_details', {}).items():
+                if queued_key == key:
+                    self.resolved_queued_requests.add(token)
             pending = self.pending_approvals.get(key[1])
             if pending and pending[1].get('threadId') == key[0]:
                 self._invalidate_approval(key[1], key[0])
@@ -460,11 +542,9 @@ class AppServer:
                 if commands is None:
                     commands = self.command_items = OrderedDict()
                 if key is not None and method == 'item/started':
-                    command = item.get('command')
-                    cwd = item.get('cwd')
-                    if (isinstance(command, str) and command and len(command) <= MAX_APPROVAL_PATCH_CHARS
-                            and isinstance(cwd, str) and cwd and len(cwd) <= MAX_APPROVAL_PATCH_CHARS):
-                        commands[key] = {'command': command, 'cwd': cwd}
+                    command = self._validated_command(item)
+                    if command is not None:
+                        commands[key] = command
                         commands.move_to_end(key)
                         while len(commands) > MAX_APPROVAL_PATCH_ITEMS:
                             commands.popitem(last=False)
@@ -501,6 +581,18 @@ class AppServer:
                                        'item_id': item.get('id'), 'type': kind,
                                        'status': item.get('status'), 'detail': detail})
         return method
+
+    def _deny_changed_request(self, request_id, method, params):
+        """Reject an approval whose item changed after the preview was read."""
+        allowed = params.get('availableDecisions') if method == 'item/commandExecution/requestApproval' else None
+        denial = next((choice for choice in ('decline', 'cancel')
+                       if allowed is None or isinstance(allowed, list) and choice in allowed), None)
+        if denial is None:
+            self.write({'id': request_id, 'error': {'code': -32601,
+                        'message': 'Item changed; no supported denial decision'}})
+        else:
+            self.write({'id': request_id, 'result': {'decision': denial}})
+        self.emit('error', '审批期间操作详情发生变化，已拒绝；请重新检查。')
 
     def _invalidate_approval(self, request_id, thread_id):
         self.pending_approvals.pop(request_id, None)

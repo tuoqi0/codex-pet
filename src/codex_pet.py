@@ -510,6 +510,8 @@ class PetManager:
         self.weather_inflight = False
         self.weather_text = '天气：未设置城市' if not settings.weather_enabled else '天气：等待查询'
         self.weather_detail = ''
+        self.weather_forecast = None
+        self.weather_seen = set()
         self.dragon = CodexPet(self)
         self.dragon.set_scale(self.window_preferences.dragon.scale)
         self.dragon.behavior.set_patrol(self.window_preferences.dragon_patrol and not self.dragon.wayland, now)
@@ -698,12 +700,13 @@ class PetManager:
                 QTimer.singleShot(900, q_reply)
         if self.qpet:
             self.q_idle.tick(now, self.qpet.isVisible() and self._available(), self.qpet.player)
-        # Weather data is a dashboard query, not a proactive interruption.
+        self._weather_reminder(now)
+        # Refresh continues during quiet hours; reminders wait until available.
         # Quiet hours, pause and active work only suppress spoken reminders.
         if self.companion.settings.weather_enabled and now >= self.weather_due and not self.weather_inflight:
-            self.refresh_weather()
+            self.refresh_weather(announce=False)
 
-    def refresh_weather(self):
+    def refresh_weather(self, announce=True):
         """Start a weather refresh if configured; return whether one started."""
         if self.weather_inflight:
             return False
@@ -717,15 +720,16 @@ class PetManager:
         self.weather_detail = ''
         if self.floating:
             self.floating.set_weather(self.weather_text, self.weather_detail)
-        self._request_weather()
+        self._request_weather(announce=announce)
         return True
 
-    def _request_weather(self):
+    def _request_weather(self, announce=True):
         settings = self.companion.settings
         if not settings.weather_enabled:
             return
         self.weather_inflight = True
-        self.weather_due = time.monotonic() + 4 * 3600
+        self.weather_announce = announce
+        self.weather_due = time.monotonic() + 15 * 60
         generation = self.weather_generation
         location = {'name': settings.weather_label, 'latitude': settings.weather_latitude,
                     'longitude': settings.weather_longitude}
@@ -740,24 +744,67 @@ class PetManager:
             summary = f'{settings.weather_label} {data["description"]} {data["temperature"]:g}{data["temperature_unit"]}'
             self.weather_text = '天气：' + summary
             self.weather_detail = f'{data["source"]} · 模型时间 {data["time"]} ({data["timezone"]})'
-            if (self.companion.settings.enabled and time.monotonic() >= self.companion.paused_until
+            self.weather_forecast = (time.monotonic(), data)
+            from weather import tomorrow_warnings
+            day, warnings, missing = tomorrow_warnings(data)
+            if day is None:
+                self.weather_detail += ' · 明日预报不可用'
+            else:
+                if warnings:
+                    self.weather_detail += ' · ' + ' '.join(warnings.values())
+                if len(missing) == 5 and not warnings:
+                    self.weather_detail += ' · 明日预报不可用'
+                elif missing:
+                    self.weather_detail += ' · 部分预报不可用：' + '、'.join(sorted(missing))
+            if (self.weather_announce and self.companion.settings.enabled and time.monotonic() >= self.companion.paused_until
                     and self._available() and not self.companion._quiet(datetime.now())):
                 if self.dragon.isVisible():
                     self.dragon.react(summary + '，出门记得看天气哦。')
                 elif self.qpet and self.qpet.isVisible():
                     self.qpet.respond(summary, '04')
         else:
+            self.weather_forecast = None
             self.weather_text = '天气：暂时不可用'
             self.weather_detail = str(data.get('message', '天气查询失败'))
             self.weather_due = time.monotonic() + 5 * 60
         if self.floating:
             self.floating.set_weather(self.weather_text, self.weather_detail)
 
+    def _weather_reminder(self, now):
+        from weather import tomorrow_warnings
+        settings = self.companion.settings
+        if (not settings.weather_enabled or not settings.weather_alerts or not settings.enabled
+                or now < self.companion.paused_until or self.companion._quiet(datetime.now())
+                or not self._available() or not self.weather_forecast):
+            return
+        fetched, data = self.weather_forecast
+        if now - fetched > 90 * 60 or now < fetched:
+            return
+        day, warnings, _missing = tomorrow_warnings(data)
+        if not day:
+            return
+        location = (settings.weather_latitude, settings.weather_longitude)
+        self.weather_seen = {key for key in self.weather_seen if key[1] == day}
+        pending = [(kind, message) for kind, message in warnings.items()
+                   if (location, day, kind) not in self.weather_seen]
+        if not pending:
+            return
+        message = ' '.join(text for _, text in pending)
+        if self.dragon.isVisible():
+            self.dragon.react(message, 'wave')
+        elif self.qpet and self.qpet.isVisible():
+            if not self.qpet.respond(message, '01'):
+                return
+        else:
+            return
+        self.weather_seen.update((location, day, kind) for kind, _ in pending)
+
     def _save_settings(self, settings):
         self.store.save(settings)
         self.companion.set_settings(settings, time.monotonic())
         self.settings_error = None
         self.weather_generation += 1
+        self.weather_forecast = None
         self.weather_inflight = False
         self.weather_due = time.monotonic() + 2
         self.weather_text = '天气：等待查询' if settings.weather_enabled else '天气：未启用'

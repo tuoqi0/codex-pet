@@ -1010,6 +1010,18 @@ class ManagerIntegrationTests(unittest.TestCase):
             self.assertEqual(respond.call_args.args[1], '01')
             self.assertTrue(manager.qpet.message)
 
+    def test_weather_refresh_schedule_is_fifteen_minutes(self):
+        manager = self.manager
+        settings = companion.CompanionSettings(weather_enabled=True, weather_label='Dalian',
+                                               weather_latitude=38.91, weather_longitude=121.61,
+                                               quiet_start='00:00', quiet_end='00:00')
+        manager._save_settings(settings)
+        with mock.patch('codex_pet.time.monotonic', return_value=1000):
+            manager._request_weather(announce=False)
+        self.assertEqual(manager.weather_due, 1900)
+        self.assertFalse(manager.weather_announce)
+        self.assertEqual(len(self.fake_weather.requests), 1)
+
     def test_weather_opt_in_results_errors_and_old_result_filter(self):
         manager = self.manager
         manager.weather_due = 0
@@ -1044,6 +1056,94 @@ class ManagerIntegrationTests(unittest.TestCase):
         self.assertEqual(manager.weather_text, '天气：暂时不可用')
         self.assertEqual(manager.weather_detail, '网络不可用')
         self.assertFalse(manager.weather_inflight)
+
+    def test_forecast_alert_waits_for_availability_deduplicates_and_uses_q_if_needed(self):
+        manager = self.manager
+        settings = companion.CompanionSettings(weather_enabled=True, weather_label='Dalian',
+            weather_latitude=38.91, weather_longitude=121.61, quiet_start='00:00', quiet_end='00:00')
+        manager._save_settings(settings)
+        now = codex_pet.time.monotonic()
+        manager.weather_forecast = (now, {})
+        warnings = {'cold': '明天降温。', 'rain': '明天有雨。'}
+        with mock.patch.object(weather, 'tomorrow_warnings', return_value=('2026-10-30', warnings, set())), \
+                mock.patch.object(manager, '_available', return_value=False), \
+                mock.patch.object(manager.dragon, 'react') as react:
+            manager._weather_reminder(now)
+            react.assert_not_called()
+            self.assertEqual(manager.weather_seen, set())
+        with mock.patch.object(weather, 'tomorrow_warnings', return_value=('2026-10-30', warnings, set())), \
+                mock.patch.object(manager, '_available', return_value=True), \
+                mock.patch.object(manager.dragon, 'react') as react:
+            manager._weather_reminder(now)
+            react.assert_called_once_with('明天降温。 明天有雨。', 'wave')
+            manager._weather_reminder(now)
+            self.assertEqual(react.call_count, 1)
+            manager.weather_forecast = (now - 91 * 60, {})
+            manager._weather_reminder(now)
+            self.assertEqual(react.call_count, 1)
+        manager.weather_forecast = (now, {})
+        manager.dragon.hide()
+        with mock.patch.object(weather, 'tomorrow_warnings', return_value=('2026-10-30', {'snow': '明天有雪。'}, set())), \
+                mock.patch.object(manager, '_available', return_value=True), \
+                mock.patch.object(manager.qpet, 'respond') as respond:
+            manager._weather_reminder(now)
+            respond.assert_called_once_with('明天有雪。', '01')
+
+    def test_failed_qpet_response_is_retried_and_only_success_is_recorded(self):
+        manager = self.manager
+        manager._save_settings(companion.CompanionSettings(weather_enabled=True,
+            weather_label='Dalian', weather_latitude=38.91, weather_longitude=121.61,
+            quiet_start='00:00', quiet_end='00:00'))
+        now = codex_pet.time.monotonic()
+        manager.weather_forecast = (now, {})
+        manager.dragon.hide()
+        with mock.patch.object(weather, 'tomorrow_warnings', return_value=('2026-10-30', {'rain': '明天有雨。'}, set())), \
+                mock.patch.object(manager, '_available', return_value=True), \
+                mock.patch.object(manager.qpet, 'respond', side_effect=[False, True]) as respond:
+            manager._weather_reminder(now)
+            self.assertFalse(manager.weather_seen)
+            manager._weather_reminder(now)
+            self.assertEqual(respond.call_count, 2)
+            self.assertTrue(manager.weather_seen)
+            manager._weather_reminder(now)
+            self.assertEqual(respond.call_count, 2)
+
+    def test_weather_details_report_partial_forecast(self):
+        manager = self.manager
+        manager._save_settings(companion.CompanionSettings(weather_enabled=True, weather_label='Dalian',
+            weather_latitude=38.91, weather_longitude=121.61, quiet_start='00:00', quiet_end='00:00'))
+        manager._request_weather(announce=False)
+        with mock.patch.object(weather, 'tomorrow_warnings', return_value=('2026-10-30', {'rain': '明天有雨。'}, {'气温'})):
+            self.fake_weather.requests[-1][1]('weather', {'description': '晴', 'temperature': 18,
+                'temperature_unit': '°C', 'source': 'Open-Meteo', 'time': '2026-10-28T12:00', 'timezone': 'Asia/Shanghai'})
+            self.app.processEvents()
+        self.assertIn('明天有雨', manager.weather_detail)
+        self.assertIn('部分预报不可用：气温', manager.weather_detail)
+
+    def test_forecast_alert_respects_settings_quiet_pause_and_errors(self):
+        manager = self.manager
+        settings = companion.CompanionSettings(weather_enabled=True, weather_label='Dalian',
+            weather_latitude=38.91, weather_longitude=121.61, quiet_start='00:00', quiet_end='00:00')
+        manager._save_settings(settings)
+        now = codex_pet.time.monotonic()
+        manager.weather_forecast = (now, {})
+        with mock.patch.object(weather, 'tomorrow_warnings', return_value=('2026-10-30', {'rain': '明天有雨。'}, set())), \
+                mock.patch.object(manager, '_available', return_value=True), \
+                mock.patch.object(manager.dragon, 'react') as react:
+            manager.companion.settings.weather_alerts = False
+            manager._weather_reminder(now)
+            manager.companion.settings.weather_alerts = True
+            manager.companion.paused_until = now + 60
+            manager._weather_reminder(now)
+            manager.companion.paused_until = 0
+            with mock.patch.object(manager.companion, '_quiet', return_value=True):
+                manager._weather_reminder(now)
+            react.assert_not_called()
+            self.assertEqual(manager.weather_seen, set())
+            manager._weather_result(manager.weather_generation, 'error', {'message': '网络不可用'})
+            self.assertIsNone(manager.weather_forecast)
+            manager._weather_reminder(now)
+            react.assert_not_called()
 
     def test_pause_keeps_weather_data_fresh_without_late_weather_speech(self):
         manager = self.manager

@@ -128,7 +128,7 @@ class WindowTests(unittest.TestCase):
         self.assertEqual(self.pet.behavior.message, '')
         self.manager.open_floating.assert_not_called()
 
-    def test_seated_wings_and_tail_move_without_fading_centre(self):
+    def test_seated_wings_move_without_fading_centre(self):
         # The seated character fills this wide image differently from the old
         # standing image: both wings are near the upper sides, tail lower right.
         frames = [frame.toImage() for frame in self.pet.frames['idle']]
@@ -142,7 +142,6 @@ class WindowTests(unittest.TestCase):
 
         self.assertGreater(differences(.25, .22, .47, .50), 20)
         self.assertGreater(differences(.73, .22, .92, .50), 20)
-        self.assertGreater(differences(.72, .53, .92, .84), 20)
         # The old .40–.60 full-height rectangle included the left wing tip.
         # Check the face, body and knees independently, leaving that wing free
         # to move. Default-window pixel stability is also checked separately in

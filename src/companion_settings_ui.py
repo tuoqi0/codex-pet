@@ -163,6 +163,9 @@ class CompanionSettingsDialog(QDialog):
         self.weather_enabled = QCheckBox('启用所选地点的天气')
         self.weather_enabled.setChecked(self.settings.weather_enabled)
         layout.addWidget(self.weather_enabled)
+        self.weather_alerts = QCheckBox('提醒明日气温变化、雨雪、大雾和大风')
+        self.weather_alerts.setChecked(self.settings.weather_alerts)
+        layout.addWidget(self.weather_alerts)
         layout.addWidget(self._hint('主动搜索并选择城市后才会联网查询；不会自动定位。中文结果不完整时可试英文或拼音，例如 Dalian；请核对地区和国家。'))
         row = QHBoxLayout()
         self.city = QLineEdit()
@@ -203,6 +206,7 @@ class CompanionSettingsDialog(QDialog):
         outer.addLayout(actions)
 
     def _set_weather_controls(self, enabled):
+        self.weather_alerts.setEnabled(enabled)
         self.city.setEnabled(enabled)
         self.search_button.setEnabled(enabled)
         self.results.setEnabled(enabled)
@@ -279,7 +283,7 @@ class CompanionSettingsDialog(QDialog):
                            greeting_minutes=self.greeting_spin.value(),
                            lunch_time=self.lunch.time().toString('HH:mm'), dinner_time=self.dinner.time().toString('HH:mm'),
                            quiet_start=self.quiet_start.time().toString('HH:mm'), quiet_end=self.quiet_end.time().toString('HH:mm'),
-                           weather_enabled=self.weather_enabled.isChecked(), weather_label=selected_label,
+                           weather_enabled=self.weather_enabled.isChecked(), weather_alerts=self.weather_alerts.isChecked(), weather_label=selected_label,
                            weather_latitude=location.get('latitude') if location else None,
                            weather_longitude=location.get('longitude') if location else None)
         try:

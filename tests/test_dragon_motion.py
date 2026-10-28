@@ -127,16 +127,14 @@ class DragonMotionTests(unittest.TestCase):
             self.assertLessEqual(changed[2], 175)
             self.assertLessEqual(changed[3], 113)
 
-    def test_wings_and_tail_move_visibly_at_default_size(self):
+    def test_wings_move_visibly_at_default_size(self):
         phases = [self.renders[index] for index in (0, 6, 12, 18)]
         left = [visible_bounds(image, (83, 23, 136, 76)) for image in phases]
         right = [visible_bounds(image, (218, 23, 295, 92)) for image in phases]
-        tail = [visible_bounds(image, (230, 120, 299, 181)) for image in phases]
         self.assertGreaterEqual(max(b[1] for b in left) - min(b[1] for b in left), 3)
         self.assertGreaterEqual(max(b[1] for b in right) - min(b[1] for b in right), 8)
-        self.assertGreaterEqual(max(b[2] for b in tail) - min(b[2] for b in tail), 12)
 
-    def test_wings_and_tail_have_distinct_motion_phases(self):
+    def test_wings_have_distinct_motion_phases(self):
         # Test the grids used to render the wings rather than the obsolete
         # flattened-art field. Their separate delays must produce different
         # motion at the same frame, while each cycle returns to its origin.
@@ -154,19 +152,45 @@ class DragonMotionTests(unittest.TestCase):
                 self.assertEqual(bounds, cycle_bounds)
                 for value, cycle_value in zip(points, cycle_points):
                     self.assertAlmostEqual(value, cycle_value, places=10)
-        w, h = dragon_motion._ART_SIZE
-        tail = (dragon_motion._MARGIN_X + w * .95, dragon_motion._MARGIN_Y + h * .75)
-        start = dragon_motion._tail_source_point(*tail, 0)
-        self.assertNotEqual(start, tail)
-        self.assertNotEqual(start, dragon_motion._tail_source_point(*tail, math.pi / 2))
-        for value, cycle_value in zip(start, dragon_motion._tail_source_point(*tail, math.tau)):
-            self.assertAlmostEqual(value, cycle_value, places=10)
+    def test_tail_region_stays_fixed_in_every_frame_and_pose(self):
+        # The upper right wing may move in front of transparent background;
+        # compare opaque figure pixels separately from the entire tail tip.
+        base = ROOT / 'assets/dragon-seated.png'
+        sources = [base, blink_overlay(base, ROOT / 'assets/dragon-seated-blink.png')]
+        for pose in ('wave', 'tea', 'happy', 'work'):
+            sources.append(gesture_overlay(base, ROOT / 'assets' / f'dragon-seated-{pose}.png',
+                                           _GESTURE_REGIONS[pose]))
+        alternate = wave_alternate(ROOT / 'assets/dragon-seated-wave.png',
+                                   ROOT / 'assets/dragon-seated-wave2.png')
+        sources.append(gesture_overlay(base, alternate, _GESTURE_REGIONS['wave']))
+        source = dragon_motion._prepare_art(base)
+        cutout, _, _, _ = dragon_motion._wing_assets()
+        body_mask = ImageChops.multiply(source.getchannel('A'), ImageChops.invert(cutout))
+        body_mask = body_mask.point(lambda v: 255 if v == 255 else 0)
+        reference = None
+        for pose, art in enumerate(sources):
+            for index, frame in enumerate(dragon_motion.motion_frames(art)):
+                image = frame.toImage().convertToFormat(QImage.Format_RGBA8888)
+                ptr = image.bits()
+                ptr.setsize(image.sizeInBytes())
+                actual = Image.frombytes('RGBA', (image.width(), image.height()), bytes(ptr))
+                if reference is None:
+                    reference = actual
+                with self.subTest(pose=pose, frame=index):
+                    difference_rgba = ImageChops.difference(reference, actual)
+                    difference = difference_rgba.convert('RGB')
+                    # The lower right is the tail tip, including its silhouette.
+                    self.assertIsNone(difference.crop((250, 205, 462, 261)).getbbox())
+                    self.assertIsNone(difference_rgba.getchannel('A').crop((250, 205, 462, 261)).getbbox())
+                    # Compare the solid part of the curved body, while allowing
+                    # the separated wing to move over transparent background.
+                    diff = ImageChops.multiply(difference, Image.merge('RGB', (body_mask,) * 3))
+                    self.assertIsNone(diff.crop((325, 110, 462, 205)).getbbox())
 
     def test_motion_extents_remain_continuous_at_default_size(self):
         # Include the last-to-first transition: a seamless 24-frame cycle.
         for area, axis in (((83, 23, 136, 76), 1),
-                           ((218, 23, 295, 92), 1),
-                           ((230, 120, 299, 181), 2)):
+                           ((218, 23, 295, 92), 1)):
             positions = [visible_bounds(image, area)[axis] for image in self.renders]
             for current, following in zip(positions, positions[1:] + positions[:1]):
                 self.assertLessEqual(abs(following - current), 4)
@@ -197,11 +221,6 @@ class DragonMotionTests(unittest.TestCase):
                 self.assertLess(bottom, image.height)
 
     def test_mesh_cells_do_not_fold(self):
-        width = dragon_motion._ART_SIZE[0] + 2 * dragon_motion._MARGIN_X
-        height = dragon_motion._ART_SIZE[1] + 2 * dragon_motion._MARGIN_Y
-        xs = [round(width * i / dragon_motion._COLUMNS) for i in range(dragon_motion._COLUMNS + 1)]
-        ys = [round(height * i / dragon_motion._ROWS) for i in range(dragon_motion._ROWS + 1)]
-
         def determinant(a, b, c):
             return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
 
@@ -210,17 +229,9 @@ class DragonMotionTests(unittest.TestCase):
                 self.assertGreater(determinant(a, b, c), 0)
 
         for index in range(dragon_motion._FRAME_COUNT):
-            phase = 2 * math.pi * index / dragon_motion._FRAME_COUNT
             for side in (0, 1):
                 for _, points in dragon_motion._wing_displacement(index, side):
                     tl, bl, br, tr = [tuple(points[i:i + 2]) for i in range(0, 8, 2)]
-                    assert_quad(tl, tr, br, bl)
-            for x0, x1 in zip(xs, xs[1:]):
-                for y0, y1 in zip(ys, ys[1:]):
-                    tl = dragon_motion._tail_source_point(x0, y0, phase)
-                    tr = dragon_motion._tail_source_point(x1, y0, phase)
-                    bl = dragon_motion._tail_source_point(x0, y1, phase)
-                    br = dragon_motion._tail_source_point(x1, y1, phase)
                     assert_quad(tl, tr, br, bl)
 
 

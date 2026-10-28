@@ -1,8 +1,8 @@
-"""Pose-independent wing layers and localized tail motion for the seated dragon.
+"""Pose-independent wing layers for the seated dragon.
 
 The source illustration is flattened, so the exposed wings are separated into
 registered image layers with a small painted underlay behind the foreground.
-The tail remains a localized mesh deformation of the original figure.
+The tail remains in its original pose.
 """
 import math
 from functools import lru_cache
@@ -27,18 +27,6 @@ def _smoothstep(low, high, value):
     return value * value * (3.0 - 2.0 * value)
 
 
-def _band(start, rise, fall, end, value):
-    return _smoothstep(start, rise, value) * (1.0 - _smoothstep(fall, end, value))
-
-
-@lru_cache(maxsize=4096)
-def _tail_weight(x, y):
-    """Position-only weight shared by every tail frame and pose."""
-    width, height = _ART_SIZE
-    nx, ny = (x - _MARGIN_X) / width, (y - _MARGIN_Y) / height
-    return _band(.38, .68, 1.00, 1.30, ny) * _smoothstep(.68, .86, nx)
-
-
 def _prepare_art(path):
     if isinstance(path, Image.Image):
         original = path.convert('RGBA')
@@ -60,13 +48,6 @@ def _wing_assets():
         folder = folder.parent / 'assets'
     return tuple(Image.open(folder / name).copy() for name in
                  ('wing-cutout.png', 'wing-underlay.png', 'wing-left.png', 'wing-right.png'))
-
-
-def _tail_source_point(x, y, phase):
-    tail = _tail_weight(x, y)
-    sway = math.sin(phase + .8)
-    return (x + _ART_SIZE[0] * .045 * tail * sway,
-            y + _ART_SIZE[1] * .045 * tail * sway)
 
 
 def _wing_displacement(index, side):
@@ -116,28 +97,14 @@ def motion_frames(path):
     """
     original = _prepare_art(path)
     width, height = original.size
-    xs = [round(width * n / _COLUMNS) for n in range(_COLUMNS + 1)]
-    ys = [round(height * n / _ROWS) for n in range(_ROWS + 1)]
     total_mask, _, _, _ = _wing_assets()
     alpha = original.getchannel('A')
     body = original.copy()
     body.putalpha(ImageChops.multiply(alpha, ImageChops.invert(total_mask)))
     frames = []
     for index in range(_FRAME_COUNT):
-        phase = 2 * math.pi * index / _FRAME_COUNT
-        mesh = []
-        # Adjacent cells share corners. Evaluate each vertex once per frame
-        # instead of recalculating each corner for every neighbouring cell.
-        points = [[_tail_source_point(x, y, phase) for y in ys] for x in xs]
-        for xi, (x0, x1) in enumerate(zip(xs, xs[1:])):
-            for yi, (y0, y1) in enumerate(zip(ys, ys[1:])):
-                quad = (*points[xi][yi], *points[xi][yi + 1],
-                        *points[xi + 1][yi + 1], *points[xi + 1][yi])
-                mesh.append(((x0, y0, x1, y1), quad))
         composed = _wing_background(index).copy()
         composed.alpha_composite(body)
-        warped = composed.transform(original.size, Image.Transform.MESH, mesh,
-                                    resample=Image.Resampling.BICUBIC)
-        image = QImage(warped.tobytes(), width, height, width * 4, QImage.Format_RGBA8888).copy()
+        image = QImage(composed.tobytes(), width, height, width * 4, QImage.Format_RGBA8888).copy()
         frames.append(QPixmap.fromImage(image))
     return frames

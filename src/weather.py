@@ -5,6 +5,8 @@ thread. Creating a client never queries a service or infers the user's location.
 """
 import math
 import threading
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import requests
 
@@ -90,7 +92,10 @@ def current_weather(location, get=requests.get):
     """Fetch current model conditions for exactly the user-selected location."""
     lat, lon = _coordinates(location)
     data = _get_json(FORECAST_URL, {'latitude': lat, 'longitude': lon,
-                                   'current': 'temperature_2m,weather_code', 'timezone': 'auto'}, get)
+                                   'current': 'temperature_2m,weather_code', 'timezone': 'auto',
+                                   'daily': 'temperature_2m_max,rain_sum,showers_sum,snowfall_sum,weather_code,wind_gusts_10m_max',
+                                   'hourly': 'weather_code',
+                                   'forecast_days': 2}, get)
     current, units = data.get('current'), data.get('current_units')
     if not isinstance(current, dict) or not isinstance(units, dict):
         raise WeatherError('天气服务未返回当前天气。')
@@ -104,7 +109,75 @@ def current_weather(location, get=requests.get):
     return {'location': dict(location), 'time': current['time'], 'timezone': data['timezone'],
             'temperature': temp, 'temperature_unit': units['temperature_2m'],
             'weather_code': code, 'description': CONDITIONS.get(code, '天气代码 %s' % code),
-            'source': SOURCE}
+            'source': SOURCE, 'daily': data.get('daily'), 'hourly': data.get('hourly')}
+
+
+def tomorrow_warnings(data, now=None):
+    """Return (local tomorrow, forecast warnings, unavailable category names).
+
+    Missing inputs do not invalidate other categories. A warning needs positive
+    forecast evidence; absent values must never be interpreted as no hazard.
+    """
+    try:
+        zone = ZoneInfo(data['timezone'])
+        local = (now or datetime.now(zone)).astimezone(zone)
+        model_time = datetime.fromisoformat(data['time']).replace(tzinfo=zone)
+        if not -300 <= (local - model_time).total_seconds() <= 2 * 3600:
+            return None, {}, set()
+    except (KeyError, TypeError, ValueError, ZoneInfoNotFoundError):
+        return None, {}, set()
+    today, tomorrow = local.date(), local.date() + timedelta(days=1)
+    daily = data.get('daily')
+    daily = daily if isinstance(daily, dict) else {}
+    days = daily.get('time')
+    days = days if isinstance(days, list) else []
+    i = days.index(today.isoformat()) if today.isoformat() in days else None
+    j = days.index(tomorrow.isoformat()) if tomorrow.isoformat() in days else None
+
+    def value(name, index):
+        values = daily.get(name)
+        if index is None or not isinstance(values, list) or index >= len(values):
+            return None
+        item = values[index]
+        if isinstance(item, bool) or not isinstance(item, (int, float)) or not math.isfinite(item):
+            return None
+        return float(item)
+
+    warnings, missing = {}, set()
+    today_max, next_max = value('temperature_2m_max', i), value('temperature_2m_max', j)
+    if today_max is None or next_max is None:
+        missing.add('气温')
+    elif today_max - next_max >= 5:
+        warnings['cold'] = f'明天最高温预计 {next_max:g}°C，比今天低 {today_max - next_max:g}°C，记得添衣。'
+    elif next_max - today_max >= 5:
+        warnings['hot'] = f'明天最高温预计 {next_max:g}°C，比今天高 {next_max - today_max:g}°C，适时调整衣物。'
+    rain, showers, snow = (value(name, j) for name in ('rain_sum', 'showers_sum', 'snowfall_sum'))
+    if rain is None or showers is None:
+        missing.add('雨量')
+    if (rain is not None and rain > 0) or (showers is not None and showers > 0):
+        warnings['rain'] = '明天预报有雨，出门记得带伞。'
+    if snow is None:
+        missing.add('雪量')
+    elif snow > 0:
+        warnings['snow'] = '明天预报有雪，出门注意保暖和路滑。'
+    gust = value('wind_gusts_10m_max', j)
+    if gust is None:
+        missing.add('阵风')
+    elif gust >= 62:
+        warnings['wind'] = f'明天最大阵风预计 {gust:g} 公里/小时，请关注当地气象部门预警。'
+    hourly = data.get('hourly')
+    times = hourly.get('time') if isinstance(hourly, dict) else None
+    codes = hourly.get('weather_code') if isinstance(hourly, dict) else None
+    if not isinstance(times, list) or not isinstance(codes, list) or len(times) != len(codes):
+        missing.add('雾')
+    else:
+        selected = [(t, code) for t, code in zip(times, codes)
+                    if isinstance(t, str) and t.startswith(tomorrow.isoformat() + 'T')]
+        if len(selected) < 23 or any(type(code) is not int for _, code in selected):
+            missing.add('雾')
+        if any(type(code) is int and code in (45, 48) for _, code in selected):
+            warnings['fog'] = '明天预报有雾，能见度可能降低，出行注意安全。'
+    return tomorrow.isoformat(), warnings, missing
 
 
 class WeatherClient:
