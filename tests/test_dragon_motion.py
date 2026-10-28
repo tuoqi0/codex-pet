@@ -76,7 +76,7 @@ class DragonMotionTests(unittest.TestCase):
                     self.assertIsNone(difference.getchannel('A').getbbox(), 'blink must not fade the figure')
 
     def test_pose_and_pil_inputs_use_identical_canvas(self):
-        self.assertEqual(len(self.frames), 12)
+        self.assertEqual(len(self.frames), 24)
         expected = self.frames[0].size()
         for name in ('dragon-seated-blink.png', 'dragon-seated-wave.png',
                      'dragon-seated-wave2.png', 'dragon-seated-tea.png',
@@ -89,7 +89,7 @@ class DragonMotionTests(unittest.TestCase):
                     self.assert_frame_edges_transparent(frame)
 
     def test_wings_and_tail_move_visibly_at_default_size(self):
-        phases = [self.renders[index] for index in (0, 3, 6, 9)]
+        phases = [self.renders[index] for index in (0, 6, 12, 18)]
         left = [visible_bounds(image, (83, 23, 136, 76)) for image in phases]
         right = [visible_bounds(image, (218, 23, 295, 92)) for image in phases]
         tail = [visible_bounds(image, (230, 120, 299, 181)) for image in phases]
@@ -131,8 +131,8 @@ class DragonMotionTests(unittest.TestCase):
         def determinant(a, b, c):
             return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
 
-        for index in range(12):
-            phase = 2 * math.pi * index / 12
+        for index in range(dragon_motion._FRAME_COUNT):
+            phase = 2 * math.pi * index / dragon_motion._FRAME_COUNT
             for x0, x1 in zip(xs, xs[1:]):
                 for y0, y1 in zip(ys, ys[1:]):
                     tl = dragon_motion._source_point(x0, y0, phase)

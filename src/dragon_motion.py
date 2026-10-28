@@ -13,12 +13,12 @@ from PyQt5.QtGui import QImage, QPixmap
 
 # A common canvas avoids one-pixel layout changes between the source poses,
 # which differ slightly in size. The added margin belongs to every pose/frame.
-_ART_SIZE = (560, 316)
-_MARGIN_X = 28
-_MARGIN_Y = 16
+_ART_SIZE = (420, 237)
+_MARGIN_X = 21
+_MARGIN_Y = 12
 _COLUMNS = 48
 _ROWS = 32
-_FRAME_COUNT = 12
+_FRAME_COUNT = 24
 
 
 def _smoothstep(low, high, value):
@@ -61,7 +61,7 @@ def _prepare_art(path):
 
 
 def motion_frames(path):
-    """Return twelve QPixmaps in one consistent, transparent padded canvas.
+    """Return twenty-four QPixmaps in one consistent, transparent padded canvas.
 
     Accepts an image path or an already loaded PIL Image, matching the old API.
     A QApplication must exist before constructing QPixmaps.

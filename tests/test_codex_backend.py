@@ -632,6 +632,71 @@ for line in sys.stdin:
             b._chat('bytes')
         self.assertEqual(b.history[-1]['content'], '你好')
 
+    def test_chat_http_failures_report_safe_structured_diagnostics(self):
+        class FailedResponse(Response):
+            def __init__(self, status, obj):
+                super().__init__(obj)
+                self.status_code = status
+                self.headers = {'x-request-id': 'req_0123456789abcdef0123456789abcdef'}
+                self.closed = False
+            def raise_for_status(self):
+                raise backend.requests.HTTPError(response=self)
+            def close(self):
+                self.closed = True
+
+        b = backend.Backend(lambda *_: None, auth=FakeAuth())
+        models = Response({'models': [{'slug': 'one', 'visibility': 'list'}]})
+        cases = [
+            (401, {'detail': 'Bearer secret-token PRIVATE INPUT'}, '身份或授权'),
+            (403, {'error': {'code': 'subscription_sharing_user_not_eligible', 'message': 'PRIVATE INPUT'}}, '工作空间'),
+            (429, {'error': {'code': 'subscription_sharing_usage_limit_exceeded'}}, '用量已达上限'),
+            (503, {'error': {'code': 'subscription_sharing_usage_unavailable'}}, '无法检查'),
+            (503, {'error': {'code': 'subscription_sharing_user_unavailable'}}, '无法获取账户或工作空间'),
+            (400, {'error': {'code': 'subscription_sharing_unsupported_capability', 'param': 'model'}}, '参数：model'),
+        ]
+        for status, obj, expected in cases:
+            with self.subTest(status=status):
+                response = FailedResponse(status, obj)
+                with mock.patch.object(backend.requests, 'get', return_value=models), mock.patch.object(backend.requests, 'post', return_value=response):
+                    with self.assertRaises(RuntimeError) as caught:
+                        b._chat('PRIVATE INPUT')
+                text = str(caught.exception)
+                self.assertIn(expected, text)
+                self.assertIn(f'HTTP {status}', text)
+                self.assertIn('req_0123456789abcdef0123456789abcdef', text)
+                self.assertNotIn('PRIVATE INPUT', text)
+                self.assertNotIn('secret-token', text)
+                self.assertEqual(b.history, [])
+                self.assertTrue(response.closed)
+
+        response = FailedResponse(403, {'error': {'code': 'secret-token', 'param': 'PRIVATE INPUT'}})
+        response.headers['x-request-id'] = 'req_PRIVATE INPUT'
+        with mock.patch.object(backend.requests, 'get', return_value=response):
+            with self.assertRaises(RuntimeError) as caught:
+                b._chat('PRIVATE INPUT')
+        self.assertIn('HTTP 403', str(caught.exception))
+        self.assertNotIn('PRIVATE INPUT', str(caught.exception))
+        self.assertNotIn('secret-token', str(caught.exception))
+
+    def test_chat_stream_failures_distinguish_limits_unsupported_and_incomplete(self):
+        b = backend.Backend(lambda *_: None, auth=FakeAuth())
+        models = Response({'models': [{'slug': 'one', 'visibility': 'list'}]})
+        cases = [
+            ({'type': 'response.failed', 'response': {'error': {'code': 'subscription_sharing_usage_limit_exceeded', 'message': 'PRIVATE'}}}, '用量已达上限'),
+            ({'type': 'error', 'code': 'subscription_sharing_unsupported_capability', 'param': 'tools', 'message': 'PRIVATE'}, '参数：tools'),
+            ({'type': 'response.incomplete', 'response': {'incomplete_details': {'reason': 'PRIVATE'}}}, '回复未完整'),
+            ({'type': 'response.failed', 'response': {'error': {'code': 'PRIVATE', 'param': 'PRIVATE'}}}, '请求失败'),
+        ]
+        for event, expected in cases:
+            with self.subTest(event=event['type']):
+                stream = Response(lines=['data: ' + json.dumps(event)])
+                with mock.patch.object(backend.requests, 'get', return_value=models), mock.patch.object(backend.requests, 'post', return_value=stream):
+                    with self.assertRaises(RuntimeError) as caught:
+                        b._chat('PRIVATE')
+                self.assertIn(expected, str(caught.exception))
+                self.assertNotIn('PRIVATE', str(caught.exception))
+                self.assertEqual(b.history, [])
+
     def test_approvals_are_not_silently_granted(self):
         sent, events = [], []
         server = object.__new__(backend.AppServer)

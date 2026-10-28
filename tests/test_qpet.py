@@ -182,6 +182,7 @@ class QPetTests(unittest.TestCase):
         pet.move(260, 100)
         self.app.processEvents()
         manager.next_interaction = 0
+        manager.next_interaction_speaker = 'dragon'
         with mock.patch('codex_pet.QTimer.singleShot') as delayed:
             manager.maybe_interact()
             self.assertTrue(dragon.behavior.message)

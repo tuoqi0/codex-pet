@@ -14,7 +14,7 @@ from PyQt5.QtGui import QColor, QPainter
 from PyQt5.QtWidgets import QApplication, QMenu, QWidget
 
 from dragon_motion import motion_frames
-from pet_behavior import PetBehavior
+from pet_behavior import DragMotion, PetBehavior
 
 
 def asset_path(name):
@@ -93,6 +93,8 @@ class CodexPet(QWidget):
         self.setToolTip('点击互动 · 双击打开快捷面板 · 拖动移动')
         self.wayland = QApplication.platformName().lower().startswith('wayland')
         self.behavior = PetBehavior(time.monotonic(), patrol=False)
+        self.drag_motion = DragMotion()
+        self.reaction_serial = 0
         self.press_global = None
         self.drag_offset = None
         self.drag_moved = False
@@ -108,7 +110,9 @@ class CodexPet(QWidget):
                   max(screen.top(), screen.bottom() - self.height() - 28))
 
     def advance(self):
-        dx = self.behavior.tick(time.monotonic())
+        now = time.monotonic()
+        dx = self.behavior.tick(now)
+        self.drag_motion.advance(now)
         if dx and not self.wayland:
             screen = QApplication.screenAt(self.frameGeometry().center()) or QApplication.primaryScreen()
             area = screen.availableGeometry()
@@ -138,17 +142,24 @@ class CodexPet(QWidget):
                 self.drag_moved = True
                 self.click_timer.stop()
                 self.speech.hide()
-                self.behavior.begin_drag()
+                now = time.monotonic()
+                self.behavior.begin_drag(now)
+                self.drag_motion.begin(now, self.press_global.x())
                 if self.wayland and self.windowHandle():
                     self.windowHandle().startSystemMove()
-            if self.drag_moved and not self.wayland:
-                self.move(event.globalPos() - self.drag_offset)
+            if self.drag_moved:
+                self.drag_motion.move(time.monotonic(), event.globalPos().x())
+                if not self.wayland:
+                    self.move(event.globalPos() - self.drag_offset)
+                self.update()
             event.accept()
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton and self.press_global is not None:
             if self.drag_moved:
-                self.behavior.end_drag(time.monotonic())
+                now = time.monotonic()
+                self.drag_motion.end(now)
+                self.behavior.end_drag(now)
                 if self.manager:
                     self.manager.window_moved(self)
             else:
@@ -191,6 +202,7 @@ class CodexPet(QWidget):
         # QAction.triggered may pass a bool; it is not a greeting.
         if not isinstance(message, str):
             message = self.behavior.rng.choice(self.MESSAGES)
+        self.reaction_serial += 1
         self.behavior.react(time.monotonic(), message, pose)
         if self.isVisible():
             self.speech.show_message(message, self)
@@ -221,19 +233,16 @@ class CodexPet(QWidget):
         p.setRenderHint(QPainter.SmoothPixmapTransform)
         p.scale(self.scale_factor, self.scale_factor)
 
-        # A held pet tilts and floats, then settles after release. This is a
-        # single opaque illustration, so drag never produces a ghosted face.
-        if self.behavior.dragging:
-            p.translate(self.WIDTH / 2, self.HEIGHT / 2)
-            p.rotate(4.0 * math.sin(now * 5.0))
-            p.translate(-self.WIDTH / 2, -self.HEIGHT / 2 - 8)
-        elif self.behavior.landed_at is not None:
-            elapsed = now - self.behavior.landed_at
-            if 0 <= elapsed < .65:
-                p.translate(0, -12 * math.sin(math.pi * elapsed / .65))
+        # A single illustration follows the pointer with a damped tilt and lift.
+        # Shrink slightly during the gesture to keep the wings inside the window.
+        p.translate(self.WIDTH / 2, self.HEIGHT / 2 - self.drag_motion.lift)
+        p.rotate(self.drag_motion.angle)
+        gesture_scale = 1.0 - self.drag_motion.lift * .006
+        p.scale(gesture_scale, gesture_scale)
+        p.translate(-self.WIDTH / 2, -self.HEIGHT / 2)
 
         pose = self.behavior.pose(now)
-        frame = self.frames[pose][int(now / .2) % 12]
+        frame = self.frames[pose][int(now / .1) % len(self.frames[pose])]
         bounds = frame.size().scaled(470, 266, Qt.KeepAspectRatio)
         x = (self.WIDTH - bounds.width()) / 2
         y = (self.HEIGHT - bounds.height()) / 2 + math.sin(now * 1.5) * 3
@@ -272,6 +281,7 @@ class QPet(QWidget):
         self.click_timer.timeout.connect(self.greet)
         self.message = ''
         self.message_until = 0.0
+        self.reaction_serial = 0
         self.player = SpritePlayer(root, self)
         self.player.pause()  # The top-level widget starts hidden.
         self.player.frame_changed.connect(self.update)
@@ -305,16 +315,18 @@ class QPet(QWidget):
 
     def respond(self, message, animation='01'):
         if self.player.play(animation):
+            self.reaction_serial += 1
             self.message = message
             duration = self.speech.show_message(message, self) if self.isVisible() else 0
             self.message_until = time.monotonic() + duration / 1000
             self.update()
+            return True
+        return False
 
     def greet(self):
         # The first catalogue entry is available even in minimal installs.
         import random
-        self.respond(random.choice(('我在这里陪你！', '摸摸头，开心！', '今天一起加油呀。', '要不要休息一会儿？')))
-        if self.manager:
+        if self.respond(random.choice(('我在这里陪你！', '摸摸头，开心！', '今天一起加油呀。', '要不要休息一会儿？'))) and self.manager:
             self.manager.on_user_greet(self)
 
     def _sync_activity_loop(self):
@@ -471,6 +483,7 @@ class PetManager:
             anchor.speech.show_message(self.window_warning, anchor)
         self._watch_screens()
         self.next_interaction = time.monotonic() + 12.0
+        self.next_interaction_speaker = 'dragon'
         self.interaction_timer = QTimer(self.dragon)
         self.interaction_timer.timeout.connect(self.maybe_interact)
         self.interaction_timer.start(1000)
@@ -602,6 +615,7 @@ class PetManager:
                             and (not self.panel or not self.panel.busy)
                             and self.qpet and self.qpet.isVisible() and self.qpet.press_global is None
                             and self.qpet.player.current in (animation, 'idle')):
+                        self.qpet.reaction_serial += 1
                         self.qpet.message = reply
                         duration = self.qpet.speech.show_message(reply, self.qpet)
                         self.qpet.message_until = time.monotonic() + duration / 1000
@@ -729,7 +743,7 @@ class PetManager:
             self.open_panel('chat')
 
     def interaction_ready(self, allow_dragon_reaction=False, allow_q_reaction=False,
-                          user_initiated=False):
+                          user_initiated=False, q_reaction_animation=None):
         dragon, qpet = self.dragon, self.qpet
         # Quiet hours, disabled reminders and snooze suppress unsolicited
         # conversation. A response to an explicit click is user-initiated.
@@ -742,8 +756,14 @@ class PetManager:
                 or not qpet or not dragon.isVisible()
                 or not qpet.isVisible() or dragon.press_global is not None
                 or qpet.press_global is not None
-                or qpet.player.current not in (('idle', '01') if allow_q_reaction else ('idle',))
+                or qpet.player.current not in (('idle', q_reaction_animation or '01')
+                                               if allow_q_reaction else ('idle',))
                 or (not allow_dragon_reaction and time.monotonic() < dragon.behavior.reaction_until)):
+            return False
+        # Do not overwrite a still-visible reminder, weather result or other
+        # conversation. The initiating pet's own bubble is allowed for replies.
+        if not user_initiated and ((dragon.speech.isVisible() and not allow_dragon_reaction)
+                                   or (qpet.speech.isVisible() and not allow_q_reaction)):
             return False
         if dragon.wayland or qpet.wayland:
             # Only an explicit greeting can be answered without reliable
@@ -761,14 +781,14 @@ class PetManager:
                                       user_initiated=True):
             return
         self.next_interaction = time.monotonic() + self.dragon.behavior.rng.uniform(35.0, 55.0)
-        message = self.dragon.behavior.message if source is self.dragon else self.qpet.message
+        serial = source.reaction_serial
 
         def reply_if_ready():
             if source is self.dragon:
-                if (self.dragon.behavior.message == message
+                if (self.dragon.reaction_serial == serial
                         and self.interaction_ready(allow_dragon_reaction=True, user_initiated=True)):
                     self.qpet.respond('我也在，和你一起！')
-            elif (self.qpet.message == message
+            elif (self.qpet.reaction_serial == serial
                   and self.interaction_ready(allow_q_reaction=True, user_initiated=True)):
                 self.dragon.react('我也在這裡陪你。')
 
@@ -781,23 +801,45 @@ class PetManager:
         if not self.interaction_ready():
             self.next_interaction = now + 10.0
             return
-        greeting, reply, pose, animation = self.dragon.behavior.rng.choice((
-            ('小白龍，一起加油！', '好呀，一起！', 'wave', '01'),
-            ('今天也有你陪伴呢。', '我在這裡！', 'happy', '20'),
-            ('準備好一起出發了嗎？', '準備好了！', 'wave', '04'),
-            ('小白龍，我們一起陪伴主人吧。', '嗯！今天也要開開心心。', 'wave', '25'),
-            ('累的時候可以歇一歇哦。', '我們一起休息吧！', 'tea', '14'),
-            ('小白龍，你今天心情如何？', '看到大家就很開心！', 'happy', '20'),
-            ('我們給主人一點鼓勵吧。', '你已經做得很好啦！', 'wave', '01'),
-        ))
-        self.dragon.react(greeting, pose)
+        if self.next_interaction_speaker == 'dragon':
+            greeting, reply, pose, animation = self.dragon.behavior.rng.choice((
+                ('小白龍，一起加油！', '好呀，一起！', 'wave', '01'),
+                ('今天也有你陪伴呢。', '我在這裡！', 'happy', '20'),
+                ('準備好一起出發了嗎？', '準備好了！', 'wave', '04'),
+                ('小白龍，我們一起陪伴主人吧。', '嗯！今天也要開開心心。', 'wave', '25'),
+                ('累的時候可以歇一歇哦。', '我們一起休息吧！', 'tea', '14'),
+                ('小白龍，你今天心情如何？', '看到大家就很開心！', 'happy', '20'),
+                ('我們給主人一點鼓勵吧。', '你已經做得很好啦！', 'wave', '01'),
+            ))
+            self.dragon.react(greeting, pose)
+            serial = self.dragon.reaction_serial
+            self.next_interaction_speaker = 'qpet'
+
+            def reply_if_ready():
+                if (self.dragon.reaction_serial == serial
+                        and self.interaction_ready(allow_dragon_reaction=True)):
+                    self.qpet.respond(reply, animation if animation in self.qpet.player.entries else '01')
+        else:
+            greeting, reply, animation, pose = self.dragon.behavior.rng.choice((
+                ('龍姐姐，你在忙什麼呀？', '在這裡陪你，一起慢慢來。', '01', 'happy'),
+                ('我們一起給主人加油吧！', '好呀，你做得很好哦。', '20', 'wave'),
+                ('想和你一起喝茶！', '來，我們歇一小會兒。', '14', 'tea'),
+                ('今天也有大家一起，真開心。', '嗯，我也很高興！', '04', 'happy'),
+            ))
+            animation = animation if animation in self.qpet.player.entries else '01'
+            if not self.qpet.respond(greeting, animation):
+                self.next_interaction = now + 10.0
+                return
+            serial = self.qpet.reaction_serial
+            self.next_interaction_speaker = 'dragon'
+
+            def reply_if_ready():
+                if (self.qpet.reaction_serial == serial
+                        and self.interaction_ready(allow_q_reaction=True,
+                                                   q_reaction_animation=animation)):
+                    self.dragon.react(reply, pose)
+
         self.next_interaction = now + self.dragon.behavior.rng.uniform(35.0, 55.0)
-
-        def reply_if_ready():
-            if (self.dragon.behavior.message == greeting
-                    and self.interaction_ready(allow_dragon_reaction=True)):
-                self.qpet.respond(reply, animation if animation in self.qpet.player.entries else '01')
-
         QTimer.singleShot(900, reply_if_ready)
 
     def populate_menu(self, menu, current):

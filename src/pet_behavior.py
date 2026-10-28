@@ -1,5 +1,52 @@
 """Time-based pet behavior, independent of the windowing system."""
+import math
 import random
+
+
+class DragMotion:
+    """A small damped response to the actual pointer movement, in logical pixels."""
+    MAX_ANGLE = 9.0
+    LIFT = 8.0
+
+    def __init__(self):
+        self.angle = 0.0
+        self.target_angle = 0.0
+        self.lift = 0.0
+        self.held = False
+        self.last_time = None
+        self.last_pointer = None
+
+    def begin(self, now, pointer_x):
+        self.held = True
+        self.last_time = now
+        self.last_pointer = pointer_x
+        self.last_time_pointer = now
+        self.target_angle = 0.0
+
+    def move(self, now, pointer_x):
+        self.advance(now)
+        dt = now - self.last_time_pointer
+        velocity = (pointer_x - self.last_pointer) / max(dt, .016)
+        self.target_angle = max(-self.MAX_ANGLE, min(self.MAX_ANGLE, -velocity * .025))
+        self.last_pointer = pointer_x
+        self.last_time_pointer = now
+
+    def end(self, now):
+        self.advance(now)
+        self.held = False
+        self.target_angle = 0.0
+        self.last_pointer = None
+
+    def advance(self, now):
+        if self.last_time is None:
+            self.last_time = now
+            return
+        dt = max(0.0, min(now - self.last_time, .1))
+        self.last_time = now
+        response = 1.0 - math.exp(-8.0 * dt)
+        self.angle += (self.target_angle - self.angle) * response
+        self.lift += ((self.LIFT if self.held else 0.0) - self.lift) * response
+        self.target_angle *= math.exp(-3.0 * dt)
 
 
 class PetBehavior:
@@ -15,6 +62,7 @@ class PetBehavior:
         self.blink_until = 0.0
         self.reaction_until = 0.0
         self.dragging = False
+        self.drag_pose = 'idle'
         self.patrol = patrol
         self.walk_until = 0.0
         self.walk_at = now + self.rng.uniform(8.0, 13.0)
@@ -44,7 +92,10 @@ class PetBehavior:
         self.walk_until = 0.0
         self.walk_at = self.reaction_until + self.rng.uniform(5.0, 9.0)
 
-    def begin_drag(self):
+    def begin_drag(self, now):
+        self.drag_pose = self.pose(now)
+        if self.drag_pose == 'blink':
+            self.drag_pose = 'idle'
         self.dragging = True
         self.landed_at = None
         self.walk_until = 0.0
@@ -89,7 +140,7 @@ class PetBehavior:
 
     def pose(self, now):
         if self.dragging:
-            return 'wave'
+            return self.drag_pose
         if now < self.reaction_until:
             if self.reaction_pose != 'wave':
                 return self.reaction_pose

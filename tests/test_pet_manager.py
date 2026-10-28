@@ -360,6 +360,121 @@ class ManagerIntegrationTests(unittest.TestCase):
         self.assertTrue(manager.qpet.speech.isVisible())
         self.assertFalse(manager.dragon.speech.geometry().intersects(manager.qpet.speech.geometry()))
 
+    def test_automatic_conversation_alternates_speaker_and_reacts(self):
+        manager = self.manager
+        manager.dragon.move(20, 100)
+        manager.qpet.move(260, 100)
+        with mock.patch.object(codex_pet.QTimer, 'singleShot') as delayed:
+            manager.next_interaction = 0
+            manager.maybe_interact()
+            self.assertTrue(manager.dragon.speech.isVisible())
+            self.assertEqual(manager.next_interaction_speaker, 'qpet')
+            delayed.call_args.args[1]()
+            self.assertTrue(manager.qpet.speech.isVisible())
+            manager.dragon.behavior.reaction_until = 0
+            manager.dragon.speech.hide()
+            manager.qpet.speech.hide()
+            manager.qpet.player.play('idle')
+            manager.next_interaction = 0
+            old_dragon_serial = manager.dragon.reaction_serial
+            delayed.reset_mock()
+            manager.maybe_interact()
+            delayed.assert_called_once()
+            self.assertTrue(manager.qpet.speech.isVisible())
+            self.assertEqual(manager.dragon.reaction_serial, old_dragon_serial)
+            self.assertEqual(manager.next_interaction_speaker, 'dragon')
+            delayed.call_args.args[1]()
+            self.assertEqual(manager.dragon.reaction_serial, old_dragon_serial + 1)
+            self.assertTrue(manager.dragon.speech.isVisible())
+            self.assertFalse(manager.dragon.speech.geometry().intersects(manager.qpet.speech.geometry()))
+
+    def test_q_conversation_reply_is_cancelled_when_context_changes(self):
+        manager = self.manager
+        manager.dragon.move(20, 100)
+        manager.qpet.move(260, 100)
+        panel = manager._ensure_panel()
+        for case in ('new_speech', 'busy', 'hidden', 'dragging', 'quiet', 'far'):
+            with self.subTest(case=case), mock.patch.object(codex_pet.QTimer, 'singleShot') as delayed:
+                manager.companion.settings.enabled = True
+                manager.companion.settings.quiet_start = '00:00'
+                manager.companion.settings.quiet_end = '00:00'
+                manager.dragon.behavior.reaction_until = 0
+                manager.dragon.speech.hide()
+                manager.dragon.show()
+                manager.dragon.press_global = None
+                manager.qpet.show()
+                manager.qpet.speech.hide()
+                manager.qpet.player.play('idle')
+                manager.qpet.move(260, 100)
+                panel.busy = False
+                manager.next_interaction_speaker = 'qpet'
+                manager.next_interaction = 0
+                manager.maybe_interact()
+                delayed.assert_called_once()
+                callback = delayed.call_args.args[1]
+                serial = manager.dragon.reaction_serial
+                if case == 'new_speech':
+                    # Even an identical text is a new reaction and invalidates the old callback.
+                    manager.qpet.respond(manager.qpet.message, manager.qpet.player.current)
+                elif case == 'busy':
+                    panel.busy = True
+                elif case == 'hidden':
+                    manager.dragon.hide()
+                elif case == 'dragging':
+                    manager.dragon.press_global = QPoint(1, 1)
+                elif case == 'quiet':
+                    manager.companion.settings.enabled = False
+                else:
+                    manager.qpet.move(1500, 100)
+                callback()
+                self.assertEqual(manager.dragon.reaction_serial, serial)
+        manager.dragon.show()
+        manager.dragon.press_global = None
+        panel.busy = False
+
+    def test_autonomous_conversation_waits_for_existing_bubbles(self):
+        manager = self.manager
+        manager.dragon.move(20, 100)
+        manager.qpet.move(260, 100)
+        for pet in (manager.dragon, manager.qpet):
+            with self.subTest(pet=pet.windowTitle()):
+                pet.speech.show_message('还在显示的消息', pet)
+                self.assertFalse(manager.interaction_ready())
+                manager.next_interaction = 0
+                with mock.patch.object(codex_pet.QTimer, 'singleShot') as delayed:
+                    manager.maybe_interact()
+                    delayed.assert_not_called()
+                pet.speech.hide()
+
+    def test_repeated_identical_user_greeting_cancels_previous_reply(self):
+        manager = self.manager
+        manager.dragon.move(20, 100)
+        manager.qpet.move(260, 100)
+        with mock.patch.object(codex_pet.QTimer, 'singleShot') as delayed:
+            manager.dragon.react('你好')
+            manager.on_user_greet(manager.dragon)
+            old_reply = delayed.call_args.args[1]
+            manager.dragon.react('你好')
+            manager.on_user_greet(manager.dragon)
+            new_reply = delayed.call_args.args[1]
+            old_reply()
+            self.assertEqual(manager.qpet.message, '')
+            new_reply()
+            self.assertEqual(manager.qpet.message, '我也在，和你一起！')
+
+    def test_q_conversation_failed_animation_does_not_schedule_reply(self):
+        manager = self.manager
+        manager.dragon.move(20, 100)
+        manager.qpet.move(260, 100)
+        manager.next_interaction_speaker = 'qpet'
+        manager.next_interaction = 0
+        with mock.patch.object(manager.qpet, 'respond', return_value=False), \
+                mock.patch.object(codex_pet.QTimer, 'singleShot') as delayed:
+            manager.maybe_interact()
+            delayed.assert_not_called()
+            self.assertEqual(manager.next_interaction_speaker, 'qpet')
+            self.assertGreater(manager.next_interaction, codex_pet.time.monotonic())
+
     def test_click_reply_still_works_when_automatic_companionship_is_suppressed(self):
         manager = self.manager
         manager.dragon.move(20, 100)

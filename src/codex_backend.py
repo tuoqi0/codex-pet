@@ -32,6 +32,65 @@ IMAGE_FORMATS = {'PNG': ('image/png', '.png'), 'JPEG': ('image/jpeg', '.jpg'),
 STOP_TIMEOUT_SECONDS = 8
 MAX_HISTORY_PAGES = 100
 
+CHATGPT_ERROR_HINTS = {
+    'subscription_sharing_user_not_eligible': '当前账户、工作空间或策略不允许使用 ChatGPT 计划。',
+    'subscription_sharing_usage_limit_exceeded': 'ChatGPT 计划或应用用量已达上限，请在 ChatGPT 用量设置中查看。',
+    'subscription_sharing_usage_unavailable': '暂时无法检查 ChatGPT 用量，请稍后重试。',
+    'subscription_sharing_user_unavailable': '暂时无法获取账户或工作空间信息，请稍后重试。',
+    'subscription_sharing_unsupported_capability': '所选模型或请求能力不受支持，请检查模型及附件。',
+    'subscription_sharing_route_not_supported': 'ChatGPT 计划不支持此请求路径，请检查应用配置。',
+    'subscription_sharing_invalid_user': 'ChatGPT 账户身份无法验证，请检查授权。',
+    'chatpass_v2_scope_not_authorized': 'ChatGPT 授权范围不足，请检查授权。',
+    'chatpass_v2_invalid_authorization_context': 'ChatGPT 授权上下文无效，请检查授权。',
+}
+CHATGPT_HTTP_HINTS = {
+    400: '请求或所选能力不受支持，请检查模型及附件。',
+    401: 'ChatGPT 身份或授权未被接受，请检查账户授权。',
+    403: 'ChatGPT 拒绝了请求，请检查账户、工作空间或地区限制。',
+    429: '请求受到限制，请稍后重试并检查 ChatGPT 用量。',
+    503: 'ChatGPT 服务或用量检查暂不可用，请稍后重试。',
+}
+
+
+def chatgpt_error_message(status=None, body=None, request_id=None, incomplete=False):
+    """Explain documented failures without reflecting arbitrary server text or user data."""
+    body = body if isinstance(body, dict) else {}
+    error = body.get('error') if isinstance(body.get('error'), dict) else {}
+    code = error.get('code')
+    known_code = code if isinstance(code, str) and code in CHATGPT_ERROR_HINTS else None
+    hint = (CHATGPT_ERROR_HINTS.get(known_code) or
+            ('ChatGPT 回复未完整结束，请重试。' if incomplete else
+             CHATGPT_HTTP_HINTS.get(status, 'ChatGPT 请求失败，请稍后重试。')))
+    details = []
+    if isinstance(status, int) and 100 <= status <= 599:
+        details.append(f'HTTP {status}')
+    if known_code:
+        details.append(known_code)
+    # Known parameter names convey useful diagnostics without echoing text or paths.
+    param = error.get('param')
+    if isinstance(param, str) and param in {'model', 'input', 'tools', 'service_tier'}:
+        details.append('参数：' + param)
+    if isinstance(request_id, str) and re.fullmatch(r'req_[a-fA-F0-9]{16,64}', request_id):
+        details.append('请求 ID：' + request_id)
+    return hint + ('（' + '；'.join(details) + '）' if details else '')
+
+
+def chatgpt_http_error(response):
+    try:
+        body = response.json()
+    except (ValueError, requests.RequestException):
+        body = None
+    headers = getattr(response, 'headers', {}) or {}
+    message = chatgpt_error_message(getattr(response, 'status_code', None), body,
+                                    headers.get('x-request-id'))
+    if isinstance(body, dict):
+        # Report only the response shape: the values may contain user data.
+        if isinstance(body.get('error'), dict):
+            message += '（结构化错误）'
+        elif 'detail' in body:
+            message += '（服务详情响应）'
+    return message
+
 
 class RpcError(RuntimeError):
     """An app-server JSON-RPC error, retaining the server error code."""
@@ -159,7 +218,7 @@ class AppServer:
         try:
             if on_spawn is not None:
                 on_spawn(self.process)
-            self.request('initialize', {'clientInfo': {'name': 'codex_pet', 'title': 'Codex Pet', 'version': '2.9.0'}, 'capabilities': {'experimentalApi': True}})
+            self.request('initialize', {'clientInfo': {'name': 'codex_pet', 'title': 'Codex Pet', 'version': '2.10.0'}, 'capabilities': {'experimentalApi': True}})
             self.write({'method': 'initialized', 'params': {}})
         except Exception:
             self.close()
@@ -463,7 +522,10 @@ class Backend:
     @staticmethod
     def _chatgpt_models(token):
         response = requests.get(RESOURCE + '/models', headers={'Authorization': 'Bearer ' + token}, timeout=30)
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except requests.HTTPError as exc:
+            raise RuntimeError(chatgpt_http_error(response)) from exc
         models = [entry for entry in response.json().get('models', [])
                   if entry.get('visibility') == 'list' and entry.get('slug')]
         if not models:
@@ -638,10 +700,9 @@ class Backend:
         try:
             response.raise_for_status()
         except requests.HTTPError as exc:
+            message = chatgpt_http_error(response)
             response.close()
-            if images:
-                raise RuntimeError('图片请求被服务拒绝，请检查所选模型的图片能力、账户授权或额度。') from exc
-            raise
+            raise RuntimeError(message) from exc
         answer, completed = [], False
         try:
             for line in response.iter_lines(decode_unicode=True):
@@ -664,7 +725,12 @@ class Backend:
                 elif kind == 'response.completed':
                     completed = True
                 elif kind in ('response.failed', 'response.incomplete', 'error'):
-                    raise RuntimeError('ChatGPT 请求失败或额度不可用，请检查 ChatGPT 用量。')
+                    response_body = event.get('response') if isinstance(event.get('response'), dict) else event
+                    if kind == 'error' and not isinstance(response_body.get('error'), dict):
+                        response_body = {'error': response_body}
+                    request_id = (getattr(response, 'headers', {}) or {}).get('x-request-id')
+                    raise RuntimeError(chatgpt_error_message(body=response_body, request_id=request_id,
+                                                             incomplete=kind == 'response.incomplete'))
         finally:
             response.close()
         if not completed:

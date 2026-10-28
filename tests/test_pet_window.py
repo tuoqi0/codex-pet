@@ -69,6 +69,37 @@ class WindowTests(unittest.TestCase):
         self.assertEqual(self.pet.behavior.message, '')
         self.manager.open_floating.assert_not_called()
 
+    def test_drag_reacts_to_pointer_and_returns_to_rest_without_changing_pose(self):
+        self.pet.behavior.set_activity('work', 0)
+        origin = QPoint(160, 100)
+        QTest.mousePress(self.pet, Qt.LeftButton, pos=origin)
+        moved = QPoint(200, 100)
+        event = QMouseEvent(QEvent.MouseMove, moved, self.pet.mapToGlobal(moved),
+                            Qt.NoButton, Qt.LeftButton, Qt.NoModifier)
+        QApplication.sendEvent(self.pet, event)
+        QTest.qWait(100)
+        self.assertEqual(self.pet.behavior.pose(999999999), 'work')
+        self.assertLess(self.pet.drag_motion.angle, -1)
+        self.assertGreater(self.pet.drag_motion.lift, 1)
+        QTest.mouseRelease(self.pet, Qt.LeftButton, pos=moved)
+        QTest.qWait(1000)
+        self.assertLess(abs(self.pet.drag_motion.angle), .1)
+        self.assertLess(self.pet.drag_motion.lift, .1)
+
+    def test_drag_extreme_tilts_do_not_clip_artwork(self):
+        self.pet.timer.stop()
+        for angle in (-self.pet.drag_motion.MAX_ANGLE, self.pet.drag_motion.MAX_ANGLE):
+            with self.subTest(angle=angle):
+                self.pet.drag_motion.angle = angle
+                self.pet.drag_motion.lift = self.pet.drag_motion.LIFT
+                image = self.pet.grab().toImage()
+                width, height = image.width(), image.height()
+                edges = ([(x, 0) for x in range(width)] +
+                         [(x, height - 1) for x in range(width)] +
+                         [(0, y) for y in range(height)] +
+                         [(width - 1, y) for y in range(height)])
+                self.assertTrue(all(qAlpha(image.pixel(x, y)) == 0 for x, y in edges))
+
     def test_drag_cancels_a_pending_single_click(self):
         pos = QPoint(160, 100)
         QTest.mouseClick(self.pet, Qt.LeftButton, pos=pos)
@@ -87,7 +118,7 @@ class WindowTests(unittest.TestCase):
         # The seated character fills this wide image differently from the old
         # standing image: both wings are near the upper sides, tail lower right.
         frames = [frame.toImage() for frame in self.pet.frames['idle']]
-        first, quarter = frames[0], frames[3]
+        first, quarter = frames[0], frames[6]
         w, h = first.width(), first.height()
 
         def differences(x0, y0, x1, y1):
@@ -111,7 +142,9 @@ class WindowTests(unittest.TestCase):
             opaque = sum(qAlpha(frame.pixel(x, y)) >= 230
                          for x in range(int(w*.50), int(w*.63), 2)
                          for y in range(int(h*.17), int(h*.27), 2))
-            self.assertGreater(opaque, 400)
+            sample_count = (len(range(int(w*.50), int(w*.63), 2))
+                            * len(range(int(h*.17), int(h*.27), 2)))
+            self.assertGreater(opaque, sample_count * .75)
             self.assertEqual(opaque, sum(qAlpha(first.pixel(x, y)) >= 230
                                          for x in range(int(w*.50), int(w*.63), 2)
                                          for y in range(int(h*.17), int(h*.27), 2)))
