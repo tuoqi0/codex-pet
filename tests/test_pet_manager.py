@@ -809,17 +809,17 @@ class ManagerIntegrationTests(unittest.TestCase):
         self.assertEqual(manager.dragon.behavior.activity, 'idle')
         self.assertEqual(manager.dragon.behavior.pose(codex_pet.time.monotonic()), 'happy')
 
-    def test_work_greeting_returns_to_work_until_task_completes(self):
+    def test_work_greeting_preserves_work_until_task_completes(self):
         manager = self.manager
         qpet = manager.qpet
         manager.play_action('work')
         self.assertEqual(qpet.player.current, 'work02')
         with mock.patch.object(codex_pet.QTimer, 'singleShot'):
             qpet.greet()
-        self.assertEqual(qpet.player.current, '01')
+        self.assertEqual(qpet.player.current, 'work02')
         self.assertTrue(qpet.speech.isVisible())
         manager.play_action('quota')
-        self.assertEqual(qpet.player.current, '01')
+        self.assertEqual(qpet.player.current, 'work02')
         qpet.player.advance()
         self.assertEqual(qpet.player.current, 'work02')
         with mock.patch.object(codex_pet.QTimer, 'singleShot'):
@@ -855,9 +855,31 @@ class ManagerIntegrationTests(unittest.TestCase):
             with mock.patch.object(codex_pet, 'QMenu', TestMenu):
                 pet.contextMenuEvent(QContextMenuEvent(QContextMenuEvent.Mouse, QPoint(10, 10)))
             self.assertEqual(manager.on_user_greet.call_count, 2)
-            self.assertEqual(pet.player.current, '01')
+            self.assertEqual(pet.player.current, 'work02')
             pet.player.advance()
             self.assertEqual(pet.player.current, 'work02')
+
+    def test_click_greetings_exchange_during_work_without_interrupting_poses(self):
+        manager = self.manager
+        manager.dragon.move(20, 100)
+        manager.qpet.move(260, 100)
+        manager.play_action('work')
+        panel = manager._ensure_panel()
+        panel.busy = True
+        panel.active_mode = 'task'
+        for source, other in ((manager.dragon, manager.qpet), (manager.qpet, manager.dragon)):
+            with self.subTest(source=source.windowTitle()):
+                source.speech.hide()
+                other.speech.hide()
+                with mock.patch.object(codex_pet.QTimer, 'singleShot') as delayed:
+                    source.greet()
+                    delayed.assert_called_once()
+                    delayed.call_args.args[1]()
+                self.assertTrue(source.speech.isVisible())
+                self.assertTrue(other.speech.isVisible())
+                self.assertEqual(manager.dragon.behavior.pose(codex_pet.time.monotonic()), 'work')
+                self.assertEqual(manager.qpet.player.current, 'work02')
+        panel.busy = False
 
     def test_work_status_change_during_drag_or_landing_uses_latest_state(self):
         manager = self.manager

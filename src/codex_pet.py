@@ -246,9 +246,15 @@ class CodexPet(QWidget):
         self.update()
 
     def greet(self):
-        self.react(pose='happy')
-        if self.manager:
-            self.manager.on_user_greet(self)
+        respond = getattr(self.manager, '_user_response', None)
+        if respond:
+            message = self.behavior.rng.choice(self.MESSAGES)
+            if respond(self, message, 'happy', '01'):
+                self.manager.on_user_greet(self)
+        else:
+            self.react(pose='happy')
+            if self.manager:
+                self.manager.on_user_greet(self)
 
     def _update_input_shape(self, *_args):
         if self.isVisible():
@@ -385,7 +391,13 @@ class QPet(QWidget):
     def greet(self):
         # The first catalogue entry is available even in minimal installs.
         import random
-        if self.respond(random.choice(('我在这里陪你！', '摸摸头，开心！', '今天一起加油呀。', '要不要休息一会儿？'))) and self.manager:
+        message = random.choice(('我在这里陪你！', '摸摸头，开心！', '今天一起加油呀。', '要不要休息一会儿？'))
+        respond = getattr(self.manager, '_user_response', None)
+        if respond:
+            greeted = respond(self, message, 'wave', '01')
+        else:
+            greeted = self.respond(message)
+        if greeted and self.manager:
             self.manager.on_user_greet(self)
 
     def _sync_activity_loop(self):
@@ -890,7 +902,7 @@ class PetManager:
             self.open_panel('chat')
 
     def interaction_ready(self, allow_dragon_reaction=False, allow_q_reaction=False,
-                          user_initiated=False, q_reaction_animation=None):
+                          user_initiated=False, q_reaction_animation=None, allow_busy=False):
         dragon, qpet = self.dragon, self.qpet
         # Quiet hours, disabled reminders and snooze suppress unsolicited
         # conversation. A response to an explicit click is user-initiated.
@@ -899,13 +911,16 @@ class PetManager:
                  or time.monotonic() < self.companion.paused_until)):
             return False
         # Qt cannot reliably establish absolute window positions on Wayland.
-        if ((self.panel and self.panel.busy)
+        working = self.dragon.behavior.activity == 'work'
+        q_allowed = ('idle', q_reaction_animation or '01') if allow_q_reaction else ('idle',)
+        if user_initiated and working:
+            q_allowed += ('work01', 'work02', 'work03', 'work04', 'work05')
+        if ((self.panel and self.panel.busy and not allow_busy)
                 or not qpet or not dragon.isVisible()
                 or not qpet.isVisible() or dragon.press_global is not None
                 or qpet.press_global is not None
                 or dragon.click_timer.isActive() or qpet.click_timer.isActive()
-                or qpet.player.current not in (('idle', q_reaction_animation or '01')
-                                               if allow_q_reaction else ('idle',))
+                or qpet.player.current not in q_allowed
                 or (not allow_dragon_reaction and time.monotonic() < dragon.behavior.reaction_until)):
             return False
         # Do not overwrite a still-visible reminder, weather result or other
@@ -924,9 +939,10 @@ class PetManager:
 
     def on_user_greet(self, source):
         """Let the other nearby companion join a user's greeting once."""
+        allow_busy = bool(self.panel and self.panel.busy)
         if not self.interaction_ready(allow_dragon_reaction=source is self.dragon,
                                       allow_q_reaction=source is self.qpet,
-                                      user_initiated=True):
+                                      user_initiated=True, allow_busy=allow_busy):
             return
         self.next_interaction = time.monotonic() + self.dragon.behavior.rng.uniform(35.0, 55.0)
         serial = source.reaction_serial
@@ -938,11 +954,11 @@ class PetManager:
                 return
             if source is self.dragon:
                 if (self.dragon.reaction_serial == serial
-                        and self.interaction_ready(allow_dragon_reaction=True, user_initiated=True)):
-                    self.qpet.respond('我也在，和你一起！')
+                        and self.interaction_ready(allow_dragon_reaction=True, user_initiated=True, allow_busy=allow_busy)):
+                    self._user_response(self.qpet, '我也在，和你一起！', 'wave', '01')
             elif (self.qpet.reaction_serial == serial
-                  and self.interaction_ready(allow_q_reaction=True, user_initiated=True)):
-                self.dragon.react('我也在这里陪你。')
+                  and self.interaction_ready(allow_q_reaction=True, user_initiated=True, allow_busy=allow_busy)):
+                self._user_response(self.dragon, '我也在这里陪你。', 'wave', '01')
 
         QTimer.singleShot(1200, reply_if_ready)
 

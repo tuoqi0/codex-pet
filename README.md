@@ -4,10 +4,10 @@ Codex Pet 是一款桌面伙伴，包含原创龙娘和可选的 Q 版白龙。�
 
 ## 安装或升级
 
-运行 `./build-deb.sh` 构建，然后安装生成的包。例如，若生成的版本是 2.25.0：
+运行 `./build-deb.sh` 构建，然后安装生成的包。例如，若生成的版本是 2.26.0：
 
 ```sh
-sudo apt install ./dist/codex-pet_2.25.0_all.deb
+sudo apt install ./dist/codex-pet_2.26.0_all.deb
 ```
 
 安装其他版本时，请将命令中的文件名改为 `dist` 目录中实际生成的文件名。启动新版前，请通过旧桌宠的右键菜单退出旧进程，然后从应用菜单打开 **Codex Pet**，或在终端运行 `codex-pet`。安装包依赖 PyQt5、Pillow、Requests、PyJWT 和 cryptography，由 apt 安装这些依赖。

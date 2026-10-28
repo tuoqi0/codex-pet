@@ -269,7 +269,7 @@ class AppServer:
         self.mode = None
         threading.Thread(target=self._read, daemon=True).start()
         try:
-            self.request('initialize', {'clientInfo': {'name': 'codex_pet', 'title': 'Codex Pet', 'version': '2.25.0'}, 'capabilities': {'experimentalApi': True}})
+            self.request('initialize', {'clientInfo': {'name': 'codex_pet', 'title': 'Codex Pet', 'version': '2.26.0'}, 'capabilities': {'experimentalApi': True}})
             self.write({'method': 'initialized', 'params': {}})
         except Exception:
             self.close()

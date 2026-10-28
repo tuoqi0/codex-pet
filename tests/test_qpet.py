@@ -108,6 +108,7 @@ class QPetTests(unittest.TestCase):
     def test_single_click_greets_after_double_click_interval(self):
         manager = mock.Mock()
         pet = QPet(manager, self.root)
+        manager._user_response.side_effect = lambda obj, message, pose, animation: obj.respond(message, animation)
         pet.show()
         with mock.patch.object(pet.player, 'play', wraps=pet.player.play) as play:
             QTest.mouseClick(pet, Qt.LeftButton, pos=QPoint(70, 70))
@@ -117,6 +118,17 @@ class QPetTests(unittest.TestCase):
             play.assert_any_call('01')
             manager.open_floating.assert_not_called()
         pet.close()
+
+    def test_greet_supports_simple_manager_without_response_helper(self):
+        manager = type('Manager', (), {'on_user_greet': mock.Mock()})()
+        pet = QPet(manager, self.root)
+        try:
+            pet.show()
+            pet.greet()
+            self.assertEqual(pet.player.current, '01')
+            manager.on_user_greet.assert_called_once_with(pet)
+        finally:
+            pet.close()
 
     def test_double_click_opens_panel_and_cancels_single_click(self):
         manager = mock.Mock()

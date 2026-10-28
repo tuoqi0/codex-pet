@@ -22,8 +22,13 @@ class WindowTests(unittest.TestCase):
     def setUp(self):
         self.manager = mock.Mock()
         self.pet = codex_pet.CodexPet(self.manager)
+        self.manager._user_response.side_effect = self._respond
         self.pet.show()
         self.app.processEvents()
+
+    def _respond(self, pet, message, pose, animation):
+        pet.react(message, pose)
+        return True
 
     def tearDown(self):
         self.pet.close()
@@ -38,6 +43,14 @@ class WindowTests(unittest.TestCase):
         self.assertTrue(self.pet.behavior.message)
         self.assertEqual(self.pet.behavior.reaction_pose, 'happy')
         self.manager.open_floating.assert_not_called()
+
+    def test_greet_supports_simple_manager_without_response_helper(self):
+        manager = type('Manager', (), {'on_user_greet': mock.Mock()})()
+        self.pet.manager = manager
+        self.pet.greet()
+        self.assertTrue(self.pet.behavior.message)
+        self.assertEqual(self.pet.behavior.reaction_pose, 'happy')
+        manager.on_user_greet.assert_called_once_with(self.pet)
 
     def test_double_click_opens_panel_and_cancels_single_click(self):
         pos = QPoint(160, 100)
