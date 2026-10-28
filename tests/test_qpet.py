@@ -7,6 +7,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
@@ -17,7 +18,7 @@ from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication
 from import_bailong import import_assets
 from sprite_player import SpritePlayer
-from codex_pet import QPet
+from codex_pet import CodexPet, PetManager, QPet
 
 
 class QPetTests(unittest.TestCase):
@@ -83,6 +84,47 @@ class QPetTests(unittest.TestCase):
         self.assertEqual(pet.player.current, 'drag')
         QTest.mouseRelease(pet, Qt.LeftButton, pos=pos)
         self.assertEqual(pet.player.current, 'landing')
+        pet.close()
+
+    def test_companions_exchange_greetings_only_when_available(self):
+        manager = PetManager.__new__(PetManager)
+        manager.dragon = CodexPet(manager)
+        manager.qpet = QPet(manager, self.root)
+        dragon, pet = manager.dragon, manager.qpet
+        dragon.show()
+        pet.show()
+        dragon.move(20, 100)
+        pet.move(260, 100)
+        self.app.processEvents()
+        manager.next_interaction = 0
+        with mock.patch('codex_pet.QTimer.singleShot') as delayed:
+            manager.maybe_interact()
+            self.assertTrue(dragon.behavior.message)
+            self.assertEqual(pet.player.current, 'idle')
+            self.assertEqual(delayed.call_args.args[0], 900)
+            reply = delayed.call_args.args[1]
+            reply()
+            self.assertEqual(pet.player.current, '01')
+            self.assertTrue(pet.message)
+
+            pet.player.play('idle')
+            pet.hide()
+            pet.message = ''
+            reply()
+            self.assertEqual(pet.message, '')
+            pet.show()
+            pet.player.play('work02')
+            self.assertFalse(manager.interaction_ready(allow_dragon_reaction=True))
+            pet.player.play('idle')
+            pet.press_global = QPoint(1, 1)
+            self.assertFalse(manager.interaction_ready(allow_dragon_reaction=True))
+            pet.press_global = None
+            pet.move(1000, 100)
+            self.assertFalse(manager.interaction_ready(allow_dragon_reaction=True))
+            pet.move(260, 100)
+            dragon.wayland = True
+            self.assertFalse(manager.interaction_ready(allow_dragon_reaction=True))
+        dragon.close()
         pet.close()
 
     def test_import_rejects_path_escape_and_existing_target(self):

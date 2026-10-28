@@ -2,15 +2,16 @@
 
 A desktop companion with an original dragon character and an optional Q-style
 white dragon. Both windows are independently draggable and share a conversation,
-task and quota panel. The original dragon blinks and crossfades between greeting
-poses; its patrol moves the illustrated figure as a whole, not a walking rig.
+task and quota panel. The original dragon blinks and changes greeting poses.
+Its wings and tail sway through a subtle mesh warp of the flat illustration;
+they are not independently rigged. Patrol moves the figure as a whole.
 
 ## Install or upgrade
 
 Build with `./build-deb.sh`. Install the resulting package with:
 
 ```sh
-sudo apt install ./dist/codex-pet_2.2.0_all.deb
+sudo apt install ./dist/codex-pet_2.3.0_all.deb
 ```
 
 Quit an already-running older version through its right-click menu before
@@ -39,7 +40,10 @@ unusable, the original dragon still runs, and the terminal shows a reason.
   character's size, hide or restore the other character, or quit. The final
   visible character cannot be hidden so the controls remain accessible.
 - The original dragon has a replay command and an optional desktop patrol. Q
-  animations for work, completion and quota are connected to panel events.
+  animations for work, completion and quota are connected to panel events. When
+  both are visible, nearby and idle on X11, they occasionally greet each other.
+  Automatic proximity interaction is disabled on Wayland, where absolute
+  window positions are not reliable.
 
 Transparent windows require a desktop compositor; transparent portions can
 still receive clicks and a window manager can ignore always-on-top hints. On

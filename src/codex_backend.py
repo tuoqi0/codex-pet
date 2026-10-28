@@ -84,7 +84,7 @@ class AppServer:
         self.mode = None
         threading.Thread(target=self._read, daemon=True).start()
         try:
-            self.request('initialize', {'clientInfo': {'name': 'codex_pet', 'title': 'Codex Pet', 'version': '2.2.0'}, 'capabilities': {'experimentalApi': True}})
+            self.request('initialize', {'clientInfo': {'name': 'codex_pet', 'title': 'Codex Pet', 'version': '2.3.0'}, 'capabilities': {'experimentalApi': True}})
             self.write({'method': 'initialized', 'params': {}})
         except Exception:
             self.close()
@@ -331,6 +331,9 @@ class Backend:
         answer, completed = [], False
         try:
             for line in response.iter_lines(decode_unicode=True):
+                # Requests leaves SSE as bytes when the response has no declared charset.
+                if isinstance(line, bytes):
+                    line = line.decode('utf-8')
                 if self.cancelled.is_set():
                     return
                 if not line or not line.startswith('data:'):

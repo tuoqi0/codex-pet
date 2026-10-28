@@ -52,6 +52,20 @@ class WindowTests(unittest.TestCase):
         self.assertFalse(self.pet.behavior.dragging)
         self.assertEqual(self.pet.behavior.message, '')
 
+    def test_wings_and_tail_move_while_centre_stays_fixed(self):
+        first = self.pet.frames['idle'][0].toImage()
+        quarter = self.pet.frames['idle'][3].toImage()
+        w, h = first.width(), first.height()
+
+        def differences(x0, y0, x1, y1):
+            return sum(first.pixel(x, y) != quarter.pixel(x, y)
+                       for x in range(int(w*x0), int(w*x1), 3)
+                       for y in range(int(h*y0), int(h*y1), 3))
+
+        self.assertGreater(differences(0, .12, .34, .46), 20)
+        self.assertGreater(differences(.70, .48, 1, .94), 20)
+        self.assertEqual(differences(.40, .12, .60, .94), 0)
+
 
 if __name__ == '__main__':
     unittest.main()

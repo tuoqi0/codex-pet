@@ -6,8 +6,9 @@ from pathlib import Path
 import sys
 import time
 
+from PIL import Image
 from PyQt5.QtCore import QPointF, QRectF, Qt, QTimer
-from PyQt5.QtGui import QColor, QFont, QPainter, QPen, QPixmap, QRadialGradient
+from PyQt5.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap, QRadialGradient
 from PyQt5.QtWidgets import QApplication, QMenu, QWidget
 
 from pet_behavior import PetBehavior
@@ -17,6 +18,47 @@ def asset_path(name):
     directory = Path(__file__).resolve().parent
     installed = directory / name
     return installed if installed.is_file() else directory.parent / 'assets' / name
+
+
+def motion_frames(path):
+    """Gently deform the outer wing and tail regions of the flat illustration.
+
+    The source is not layered: this is a small mesh warp, not skeletal motion.
+    The centre and joins remain fixed, and a single complete image is drawn per
+    frame so pose changes never overlay two translucent faces.
+    """
+    with Image.open(path) as source:
+        original = source.convert('RGBA')
+        original.thumbnail((560, 694), Image.Resampling.LANCZOS)
+    width, height = original.size
+    frames = []
+    for index in range(12):
+        phase = 2 * math.pi * index / 12
+
+        def point(x, y):
+            nx, ny = x / width, y / height
+            wing = max(0.0, (.34 - nx) / .34, (nx - .66) / .34)
+            wing *= math.sin(math.pi * (ny - .12) / .34) if .12 < ny < .46 else 0
+            tail = max(0.0, (nx - .70) / .30)
+            tail *= math.sin(math.pi * (ny - .48) / .46) if .48 < ny < .94 else 0
+            return (x + width * .012 * tail * math.sin(phase + .8),
+                    y + height * .018 * wing * math.sin(phase)
+                    + height * .008 * tail * math.sin(phase + .8))
+
+        mesh = []
+        xs = [round(width * n / 16) for n in range(17)]
+        ys = [round(height * n / 24) for n in range(25)]
+        for x0, x1 in zip(xs, xs[1:]):
+            for y0, y1 in zip(ys, ys[1:]):
+                quad = (*point(x0, y0), *point(x0, y1),
+                        *point(x1, y1), *point(x1, y0))
+                mesh.append(((x0, y0, x1, y1), quad))
+        warped = original.transform(original.size, Image.Transform.MESH, mesh,
+                                    resample=Image.Resampling.BICUBIC)
+        data = warped.tobytes()
+        image = QImage(data, width, height, width * 4, QImage.Format_RGBA8888).copy()
+        frames.append(QPixmap.fromImage(image))
+    return frames
 
 
 class CodexPet(QWidget):
@@ -30,10 +72,7 @@ class CodexPet(QWidget):
         self.scale_factor = 0.63
         self.frames = {}
         for pose, filename in (('idle', 'dragon-lady.png'), ('blink', 'blink.png'), ('wave', 'wave.png'), ('wave2', 'wave2.png')):
-            frame = QPixmap(str(asset_path(filename)))
-            if frame.isNull():
-                raise RuntimeError(f'Cannot load pet pose: {asset_path(filename)}')
-            self.frames[pose] = frame
+            self.frames[pose] = motion_frames(asset_path(filename))
         self.setWindowTitle('Codex Pet')
         self.setFixedSize(round(self.WIDTH * self.scale_factor), round(self.HEIGHT * self.scale_factor))
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint)
@@ -46,9 +85,6 @@ class CodexPet(QWidget):
         self.drag_offset = None
         self.drag_moved = False
         self.x_remainder = 0.0
-        self.display_pose = 'idle'
-        self.previous_pose = 'idle'
-        self.pose_changed_at = time.monotonic()
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.advance)
         self.timer.start(33)
@@ -175,20 +211,14 @@ class CodexPet(QWidget):
             p.restore()
 
         pose = self.behavior.pose(now)
-        if pose != self.display_pose:
-            self.previous_pose, self.display_pose = self.display_pose, pose
-            self.pose_changed_at = now
-        frame = self.frames[self.display_pose]
-        blend = min(1.0, (now - self.pose_changed_at) / 0.16)
+        frame = self.frames[pose][int(now / .2) % 12]
         bounds = frame.size().scaled(350, 465, Qt.KeepAspectRatio)
         x = (self.WIDTH - bounds.width()) / 2
         y = (self.HEIGHT - bounds.height()) / 2 + math.sin(now * 1.5) * 3
         target = QRectF(x, y, bounds.width(), bounds.height())
-        previous = self.frames[self.previous_pose]
-        p.setOpacity(appear * (1.0 - blend))
-        p.drawPixmap(target, previous, QRectF(previous.rect()))
-        p.setOpacity(appear * blend)
+        p.setOpacity(appear)
         p.drawPixmap(target, frame, QRectF(frame.rect()))
+        p.setOpacity(1.0)
         p.setPen(Qt.NoPen)
         for i, (x, y) in enumerate(((50, 120), (331, 155), (39, 305), (340, 335), (89, 420))):
             twinkle = .3 + .7 * (0.5 + 0.5 * math.sin(now * 2.0 + i * 2.1))
@@ -224,6 +254,8 @@ class QPet(QWidget):
         self.wayland = QApplication.platformName().lower().startswith('wayland')
         self.press_global = self.drag_offset = None
         self.drag_moved = False
+        self.message = ''
+        self.message_until = 0.0
         self.player = SpritePlayer(root, self)
         self.player.frame_changed.connect(self.update)
         self.set_scale(1.0)
@@ -253,6 +285,20 @@ class QPet(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.SmoothPixmapTransform)
         painter.drawImage(rect, image, QRectF(image.rect()))
+        if time.monotonic() < self.message_until:
+            painter.setRenderHint(QPainter.Antialiasing)
+            painter.setPen(QPen(QColor('#d8c4ff'), 1))
+            painter.setBrush(QColor(33, 25, 65, 230))
+            bubble = QRectF(10, 4, self.width() - 20, 28)
+            painter.drawRoundedRect(bubble, 12, 12)
+            painter.setPen(QColor('#fff8ff'))
+            painter.drawText(bubble, Qt.AlignCenter, self.message)
+
+    def respond(self, message):
+        if self.player.play('01'):
+            self.message = message
+            self.message_until = time.monotonic() + 2.4
+            self.update()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -318,6 +364,45 @@ class PetManager:
         self.dragon.show()
         if self.qpet:
             self.qpet.show()
+        self.next_interaction = time.monotonic() + 12.0
+        self.interaction_timer = QTimer(self.dragon)
+        self.interaction_timer.timeout.connect(self.maybe_interact)
+        self.interaction_timer.start(1000)
+
+    def interaction_ready(self, allow_dragon_reaction=False):
+        dragon, qpet = self.dragon, self.qpet
+        # Qt cannot reliably establish absolute window positions on Wayland.
+        if (not qpet or dragon.wayland or qpet.wayland or not dragon.isVisible()
+                or not qpet.isVisible() or dragon.press_global is not None
+                or qpet.press_global is not None or qpet.player.current != 'idle'
+                or (not allow_dragon_reaction and time.monotonic() < dragon.behavior.reaction_until)):
+            return False
+        a, b = dragon.frameGeometry(), qpet.frameGeometry()
+        dx = max(a.left() - b.right() - 1, b.left() - a.right() - 1, 0)
+        dy = max(a.top() - b.bottom() - 1, b.top() - a.bottom() - 1, 0)
+        return math.hypot(dx, dy) <= 200
+
+    def maybe_interact(self):
+        now = time.monotonic()
+        if now < self.next_interaction:
+            return
+        if not self.interaction_ready():
+            self.next_interaction = now + 10.0
+            return
+        greeting, reply = self.dragon.behavior.rng.choice((
+            ('小白龍，一起加油！', '好呀，一起！'),
+            ('今天也有你陪伴呢。', '我在這裡！'),
+            ('準備好一起出發了嗎？', '準備好了！'),
+        ))
+        self.dragon.react(greeting)
+        self.next_interaction = now + self.dragon.behavior.rng.uniform(35.0, 55.0)
+
+        def reply_if_ready():
+            if (self.dragon.behavior.message == greeting
+                    and self.interaction_ready(allow_dragon_reaction=True)):
+                self.qpet.respond(reply)
+
+        QTimer.singleShot(900, reply_if_ready)
 
     def populate_menu(self, menu, current):
         menu.addSeparator()

@@ -1,17 +1,174 @@
 """Shared Codex Pet conversation and usage window."""
 import json
+import math
 from datetime import datetime
 from pathlib import Path
 
 from PyQt5.QtCore import QObject, Qt, QUrl, pyqtSignal
-from PyQt5.QtGui import QDesktopServices, QTextCursor
+from PyQt5.QtGui import QColor, QDesktopServices, QPainter, QPen, QPixmap, QTextCursor, QTextOption
 from PyQt5.QtWidgets import (
     QApplication, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QInputDialog,
-    QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QPushButton, QTabWidget,
+    QFrame, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QTabWidget, QTextEdit,
     QVBoxLayout, QWidget,
 )
 
 from codex_backend import Backend
+
+
+STYLE = """
+QDialog { background: #111426; color: #e9e7fa; }
+QWidget { color: #e9e7fa; font-family: "Noto Sans CJK TC", "Noto Sans", sans-serif; font-size: 13px; }
+QFrame#hero { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #2e2858, stop:0.57 #252449, stop:1 #19334b); border: 1px solid #494675; border-radius: 16px; }
+QLabel#eyebrow { color: #c6bbff; font-size: 10px; font-weight: 700; letter-spacing: 2px; }
+QLabel#heroTitle { color: #ffffff; font-size: 20px; font-weight: 700; }
+QLabel#heroSub { color: #d1cce7; font-size: 12px; }
+QLabel#avatar { background: #e3dcfa; border: 2px solid #cbbcff; border-radius: 23px; }
+QTabWidget::pane { border: 0; background: transparent; }
+QTabBar::tab { color: #aaa8c4; padding: 8px 18px; margin-right: 8px; border-bottom: 2px solid transparent; font-weight: 600; }
+QTabBar::tab:selected { color: #f8f6ff; border-bottom: 2px solid #bca6ff; }
+QTabBar::tab:hover:!selected { color: #ded6fa; }
+QFrame#card { background: #1b1d33; border: 1px solid #323550; border-radius: 12px; }
+QLabel#muted { color: #a6a7c3; font-size: 11px; }
+QLabel#sectionTitle { color: #faf8ff; font-size: 15px; font-weight: 700; }
+QLabel#notice { color: #c3c1db; font-size: 11px; }
+QLabel#status { color: #b7b5d0; padding: 4px 2px; font-size: 11px; }
+QComboBox, QPlainTextEdit { background: #14172a; color: #f1efff; border: 1px solid #44445f; border-radius: 8px; padding: 8px; selection-background-color: #735ec7; }
+QComboBox { padding-right: 26px; min-height: 20px; }
+QComboBox::drop-down { width: 23px; border: 0; }
+QComboBox QAbstractItemView { background: #242640; color: #f1efff; selection-background-color: #655297; border: 1px solid #555377; }
+QComboBox:focus, QPlainTextEdit:focus { border: 1px solid #a993ff; }
+QPushButton { background: #30324e; color: #edebff; border: 1px solid #484968; border-radius: 8px; padding: 8px 13px; font-weight: 600; }
+QPushButton:hover { background: #414266; border-color: #8582ad; }
+QPushButton:pressed { background: #292b46; }
+QPushButton:disabled { color: #74758f; background: #24263a; border-color: #34364a; }
+QPushButton#compact { padding: 4px 10px; min-height: 20px; }
+QPushButton#primary { background: #a992f0; color: #1d1932; border: 0; padding: 9px 20px; }
+QPushButton#primary:hover { background: #c2b0ff; }
+QPushButton#primary:disabled { background: #49435f; color: #a6a0b9; }
+QScrollArea#conversation { background: #15182b; border: 1px solid #30334d; border-radius: 12px; }
+QWidget#messages { background: #15182b; }
+QTextEdit#assistantBubble { color: #efedfc; background: #282b47; border: 1px solid #414562; border-radius: 12px; padding: 11px 13px; }
+QTextEdit#userBubble { color: #f8f5ff; background: #625092; border: 1px solid #8875be; border-radius: 12px; padding: 11px 13px; }
+QLabel#bubbleName { color: #aaa9ca; font-size: 10px; font-weight: 600; }
+QProgressBar { background: #121527; border: 0; border-radius: 4px; height: 8px; text-align: center; }
+QProgressBar::chunk { background: #ad96f4; border-radius: 4px; }
+QScrollBar:vertical { background: transparent; width: 9px; margin: 3px; }
+QScrollBar::handle:vertical { background: #51516f; border-radius: 3px; min-height: 24px; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+"""
+
+
+class ModeSelector(QComboBox):
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(QPen(QColor('#c8c1e7'), 1.6, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        x, y = self.width() - 16, self.height() // 2 - 2
+        painter.drawLine(x - 4, y, x, y + 4)
+        painter.drawLine(x, y + 4, x + 4, y)
+
+
+class StatusLabel(QLabel):
+    def setText(self, text):
+        super().setText(text)
+        self.setToolTip(text)
+
+
+class MessageBubble(QTextEdit):
+    """Read-only, selectable text that wraps long tokens and grows with its content."""
+
+    def __init__(self, text, role):
+        super().__init__()
+        self.setObjectName('userBubble' if role == 'user' else 'assistantBubble')
+        self.setReadOnly(True)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setLineWrapMode(QTextEdit.WidgetWidth)
+        self.setWordWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
+        self.document().setDocumentMargin(0)
+        self.document().documentLayout().documentSizeChanged.connect(self._resize_to_document)
+        self.setPlainText(text)
+        self._resize_to_document()
+
+    def _resize_to_document(self, size=None):
+        self.setFixedHeight(max(44, math.ceil(self.document().size().height()) + 24))
+
+    def append_text(self, text):
+        selection = self.textCursor()
+        cursor = QTextCursor(self.document())
+        cursor.movePosition(QTextCursor.End)
+        cursor.insertText(str(text))
+        self.setTextCursor(selection)
+
+
+
+class ChatTranscript(QScrollArea):
+    """Selectable plain-text bubbles with one continuously updated response."""
+
+    def __init__(self):
+        super().__init__()
+        self.setObjectName('conversation')
+        self.setWidgetResizable(True)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.content = QWidget()
+        self.content.setObjectName('messages')
+        self.messages = QVBoxLayout(self.content)
+        self.messages.setContentsMargins(16, 18, 16, 18)
+        self.messages.setSpacing(14)
+        self.messages.addStretch(1)
+        self.setWidget(self.content)
+        self.bubbles = []
+        self.response = None
+        self.follow_latest = True
+        self.verticalScrollBar().rangeChanged.connect(self._range_changed)
+        self.verticalScrollBar().valueChanged.connect(self._position_changed)
+        self.add_message('assistant', '你好呀，我在這裡。想聊聊天，或一起處理什麼事情？')
+
+    def add_message(self, role, text):
+        self._remember_scroll_position()
+        group = QWidget()
+        box = QVBoxLayout(group)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(5)
+        name = QLabel('你' if role == 'user' else '✦  CODEX')
+        name.setObjectName('bubbleName')
+        bubble = MessageBubble(text, role)
+        box.addWidget(name)
+        box.addWidget(bubble)
+        row = QHBoxLayout()
+        if role == 'user':
+            row.addStretch(1)
+        row.addWidget(group, 4)
+        if role != 'user':
+            row.addStretch(1)
+        self.messages.insertLayout(self.messages.count() - 1, row)
+        self.bubbles.append(bubble)
+        return bubble
+
+    def start_exchange(self, text):
+        self.add_message('user', text)
+        self.response = self.add_message('assistant', '')
+
+    def append_response(self, text):
+        if self.response is None:
+            self.response = self.add_message('assistant', '')
+        self._remember_scroll_position()
+        self.response.append_text(text)
+
+    def _remember_scroll_position(self):
+        bar = self.verticalScrollBar()
+        self.follow_latest = bar.value() >= bar.maximum() - 8
+
+    def _range_changed(self, minimum, maximum):
+        if self.follow_latest:
+            self.verticalScrollBar().setValue(maximum)
+
+    def _position_changed(self, value):
+        self.follow_latest = value >= self.verticalScrollBar().maximum() - 8
+
+    def toPlainText(self):
+        return '\n'.join(bubble.toPlainText() for bubble in self.bubbles)
 
 
 class _EventBridge(QObject):
@@ -23,8 +180,11 @@ class PetPanel(QDialog):
 
     def __init__(self, action_callback=None, parent=None, backend_factory=Backend):
         super().__init__(parent)
+        self.setObjectName('petPanel')
         self.setWindowTitle('Codex Pet · 對話與額度')
-        self.resize(590, 620)
+        self.resize(650, 780)
+        self.setMinimumSize(480, 580)
+        self.setStyleSheet(STYLE)
         self.action_callback = action_callback or (lambda action: None)
         self.cwd = None
         self.busy = False
@@ -32,24 +192,77 @@ class PetPanel(QDialog):
         self.bridge = _EventBridge(self)
         self.bridge.received.connect(self._event)
         self.backend = backend_factory(self.bridge.received.emit)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 14, 18, 10)
+        layout.setSpacing(10)
+        layout.addWidget(self._hero())
         self.tabs = QTabWidget(self)
         self._build_chat()
         self._build_limits()
-        layout = QVBoxLayout(self)
-        layout.addWidget(self.tabs)
-        self.status = QLabel('尚未連接。請先登入 ChatGPT。')
+        layout.addWidget(self.tabs, 1)
+        self.status = StatusLabel()
+        self.status.setText('✦  尚未連接。請先登入 ChatGPT。')
+        self.status.setMaximumHeight(38)
+        self.status.setObjectName('status')
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
         app = QApplication.instance()
         if app:
             app.aboutToQuit.connect(self.backend.close)
 
+    def _hero(self):
+        hero = QFrame()
+        hero.setObjectName('hero')
+        row = QHBoxLayout(hero)
+        row.setContentsMargins(16, 8, 16, 8)
+        row.setSpacing(15)
+        avatar = QLabel()
+        avatar.setObjectName('avatar')
+        avatar.setFixedSize(46, 46)
+        avatar.setAlignment(Qt.AlignCenter)
+        directory = Path(__file__).resolve().parent
+        image = directory / 'dragon-lady.png'
+        if not image.is_file():
+            image = directory.parent / 'assets' / 'dragon-lady.png'
+        pixmap = QPixmap(str(image))
+        if not pixmap.isNull():
+            portrait = pixmap.copy(int(pixmap.width() * .35), 0, int(pixmap.width() * .30), int(pixmap.width() * .30))
+            avatar.setPixmap(portrait.scaled(42, 42, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        row.addWidget(avatar)
+        titles = QVBoxLayout()
+        titles.setSpacing(1)
+        eyebrow = QLabel('✦  你的桌面夥伴')
+        eyebrow.setObjectName('eyebrow')
+        title = QLabel('Codex Pet')
+        title.setObjectName('heroTitle')
+        subtitle = QLabel('聊聊靈感，也陪你完成每一件事。')
+        subtitle.setObjectName('heroSub')
+        titles.addWidget(eyebrow)
+        titles.addWidget(title)
+        titles.addWidget(subtitle)
+        row.addLayout(titles, 1)
+        return hero
+
+    @staticmethod
+    def _card():
+        card = QFrame()
+        card.setObjectName('card')
+        return card
+
     def _build_chat(self):
-        page = QWidget(self)
+        page = QWidget()
         layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 6, 0, 0)
+        layout.setSpacing(10)
+        card = self._card()
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(12, 7, 12, 7)
+        card_layout.setSpacing(4)
         row = QHBoxLayout()
-        row.addWidget(QLabel('模式'))
-        self.mode = QComboBox()
+        mode_label = QLabel('對話模式')
+        mode_label.setObjectName('muted')
+        row.addWidget(mode_label)
+        self.mode = ModeSelector()
         for label, value in (('普通對話 · ChatGPT 計劃', 'chat'),
                              ('計劃 · ChatGPT 計劃', 'plan'),
                              ('任務 · Codex', 'task')):
@@ -57,36 +270,44 @@ class PetPanel(QDialog):
         self.mode.currentIndexChanged.connect(self._mode_changed)
         row.addWidget(self.mode, 1)
         self.login_button = QPushButton('登入 ChatGPT')
+        self.login_button.setObjectName('compact')
         self.login_button.clicked.connect(self.backend_login)
         row.addWidget(self.login_button)
-        layout.addLayout(row)
+        card_layout.addLayout(row)
         self.notice = QLabel()
+        self.notice.setObjectName('notice')
         self.notice.setWordWrap(True)
-        layout.addWidget(self.notice)
+        card_layout.addWidget(self.notice)
         project = QHBoxLayout()
-        self.project_label = QLabel('尚未選擇工作目錄')
+        self.project_label = QLabel('工作目錄：尚未選擇')
+        self.project_label.setObjectName('muted')
         self.project_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.project_label.setWordWrap(True)
         project.addWidget(self.project_label, 1)
-        choose = QPushButton('選擇目錄…')
+        choose = QPushButton('選擇目錄')
+        choose.setObjectName('compact')
         choose.clicked.connect(self._choose_cwd)
         project.addWidget(choose)
-        layout.addLayout(project)
-        self.transcript = QPlainTextEdit()
-        self.transcript.setReadOnly(True)
-        self.transcript.setPlaceholderText('在下方輸入訊息。')
+        card_layout.addLayout(project)
+        layout.addWidget(card)
+        self.transcript = ChatTranscript()
         layout.addWidget(self.transcript, 1)
         self.prompt = QPlainTextEdit()
-        self.prompt.setPlaceholderText('輸入訊息或描述任務')
-        self.prompt.setMaximumHeight(120)
+        self.prompt.setPlaceholderText('寫下想說的話，或者描述一個任務…')
+        self.prompt.setMinimumHeight(54)
+        self.prompt.setMaximumHeight(72)
         layout.addWidget(self.prompt)
         buttons = QHBoxLayout()
-        self.send_button = QPushButton('發送')
-        self.send_button.clicked.connect(self._send)
+        hint = QLabel('✦  隨時可以和我說話')
+        hint.setObjectName('muted')
+        buttons.addWidget(hint)
+        buttons.addStretch(1)
         self.cancel_button = QPushButton('停止')
         self.cancel_button.setEnabled(False)
         self.cancel_button.clicked.connect(self.backend_cancel)
-        buttons.addStretch(1)
+        self.send_button = QPushButton('發送  ↗')
+        self.send_button.setObjectName('primary')
+        self.send_button.clicked.connect(self._send)
         buttons.addWidget(self.cancel_button)
         buttons.addWidget(self.send_button)
         layout.addLayout(buttons)
@@ -94,26 +315,70 @@ class PetPanel(QDialog):
         self._mode_changed()
 
     def _build_limits(self):
-        page = QWidget(self)
+        page = QWidget()
         layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 10, 0, 0)
+        layout.setSpacing(12)
+        heading = QLabel('帳戶與用量')
+        heading.setObjectName('sectionTitle')
+        layout.addWidget(heading)
+        description = QLabel('查看目前授權帳戶及 Codex 回傳的用量窗口。')
+        description.setObjectName('muted')
+        description.setWordWrap(True)
+        layout.addWidget(description)
+        account = self._card()
+        account_layout = QVBoxLayout(account)
+        account_layout.setContentsMargins(17, 16, 17, 16)
+        account_layout.setSpacing(12)
+        account_heading = QLabel('✦  已連接的帳戶')
+        account_heading.setObjectName('sectionTitle')
+        account_layout.addWidget(account_heading)
         self.account_text = QLabel('ChatGPT 授權：尚未查詢')
         self.account_text.setWordWrap(True)
         self.codex_account_text = QLabel('Codex 帳戶：尚未查詢')
         self.codex_account_text.setWordWrap(True)
+        account_layout.addWidget(self.account_text)
+        account_layout.addWidget(self.codex_account_text)
+        layout.addWidget(account)
+        usage = self._card()
+        usage_layout = QVBoxLayout(usage)
+        usage_layout.setContentsMargins(17, 16, 17, 16)
+        usage_layout.setSpacing(12)
+        usage_heading = QLabel('◷  Codex 額度')
+        usage_heading.setObjectName('sectionTitle')
+        usage_layout.addWidget(usage_heading)
         self.limit_text = QLabel('Codex 額度：尚未查詢')
         self.limit_text.setWordWrap(True)
         self.limit_text.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        layout.addWidget(self.account_text)
-        layout.addWidget(self.codex_account_text)
-        layout.addWidget(self.limit_text)
+        usage_layout.addWidget(self.limit_text)
+        self.usage_bars = []
+        for _ in range(2):
+            metric = QWidget()
+            metric_layout = QVBoxLayout(metric)
+            metric_layout.setContentsMargins(0, 1, 0, 1)
+            metric_layout.setSpacing(5)
+            caption = QLabel()
+            caption.setObjectName('muted')
+            bar = QProgressBar()
+            bar.setRange(0, 100)
+            bar.setTextVisible(False)
+            bar.setFixedHeight(8)
+            metric_layout.addWidget(caption)
+            metric_layout.addWidget(bar)
+            usage_layout.addWidget(metric)
+            metric.hide()
+            self.usage_bars.append((metric, caption, bar))
+        layout.addWidget(usage)
         layout.addStretch(1)
         row = QHBoxLayout()
         refresh = QPushButton('刷新額度')
+        refresh.setObjectName('primary')
         refresh.clicked.connect(self.refresh_limits)
         manage = QPushButton('管理 ChatGPT 用量')
         manage.clicked.connect(lambda: QDesktopServices.openUrl(QUrl('https://chatgpt.com/#settings/Usage')))
         row.addWidget(refresh)
         row.addWidget(manage)
+        row.addStretch(1)
         layout.addLayout(row)
         self.tabs.addTab(page, '帳戶與額度')
 
@@ -166,17 +431,13 @@ class PetPanel(QDialog):
         self.send_button.setEnabled(False)
         self.cancel_button.setEnabled(True)
         self.prompt.clear()
-        self._append('\n你：' + text + '\n\nCodex：')
+        self.transcript.start_exchange(text)
         if mode in ('task', 'plan'):
             self.action_callback('work')
         self.backend.send(mode, text, self.cwd)
 
     def _append(self, text):
-        cursor = self.transcript.textCursor()
-        cursor.movePosition(QTextCursor.End)
-        cursor.insertText(str(text))
-        self.transcript.setTextCursor(cursor)
-        self.transcript.ensureCursorVisible()
+        self.transcript.append_response(text)
 
     def _event(self, event, data):
         if event == 'delta':
@@ -185,9 +446,11 @@ class PetPanel(QDialog):
             self.status.setText(str(data))
         elif event == 'error':
             self.status.setText(str(data))
-            self._append('\n[錯誤] ' + str(data) + '\n')
             if self.busy:
+                self._append('\n[錯誤] ' + str(data) + '\n')
                 self.last_error = str(data)
+            else:
+                self.transcript.add_message('assistant', '[錯誤] ' + str(data))
         elif event == 'done':
             result = data if isinstance(data, dict) else {}
             if result.get('status') == 'completed':
@@ -227,6 +490,7 @@ class PetPanel(QDialog):
         if not entries and data.get('rateLimits'):
             entries = {'codex': data['rateLimits']}
         lines = []
+        metrics = []
         for name, limit in entries.items():
             if not isinstance(limit, dict):
                 continue
@@ -242,7 +506,16 @@ class PetPanel(QDialog):
                 except (TypeError, ValueError, OSError, OverflowError):
                     reset_text = '不可用'
                 lines.append(f'{name} {label}：已用 {used if used is not None else "不可用"}%　窗口 {minutes if minutes is not None else "不可用"} 分鐘　重置 {reset_text}')
+                if isinstance(used, (int, float)) and not isinstance(used, bool) and math.isfinite(used) and 0 <= used <= 100:
+                    metrics.append((f'{name} · {label}  {used}%', round(used)))
         self.limit_text.setText('\n'.join(lines) if lines else 'Codex 額度：不可用')
+        for index, (widget, caption, bar) in enumerate(self.usage_bars):
+            if index < len(metrics):
+                caption.setText(metrics[index][0])
+                bar.setValue(metrics[index][1])
+                widget.show()
+            else:
+                widget.hide()
 
     def _approval(self, data):
         if not isinstance(data, dict) or 'id' not in data:

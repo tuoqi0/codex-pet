@@ -50,6 +50,12 @@ class BackendTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, '完整结束'):
                 b._chat('again')
         self.assertEqual(len(b.history), 2)
+        # Requests can yield raw bytes for text/event-stream without a charset.
+        byte_stream = Response(lines=[('data: ' + json.dumps({'type': 'response.output_text.delta', 'delta': '你好'}, ensure_ascii=False)).encode('utf-8'),
+                                      ('data: ' + json.dumps({'type': 'response.completed'})).encode('utf-8')])
+        with mock.patch.object(backend.requests, 'get', return_value=models), mock.patch.object(backend.requests, 'post', return_value=byte_stream):
+            b._chat('bytes')
+        self.assertEqual(b.history[-1]['content'], '你好')
 
     def test_approvals_are_not_silently_granted(self):
         sent, events = [], []
