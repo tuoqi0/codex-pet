@@ -124,8 +124,29 @@ class MessageBubble(QTextEdit):
         self._render_timer.setInterval(50)
         self._render_timer.timeout.connect(self._render)
         self._render_pending = False
+        self._pressed_link = None
         self.selectionChanged.connect(self._selection_changed)
         self._render()
+
+    def mousePressEvent(self, event):
+        self._pressed_link = None
+        if event.button() == Qt.LeftButton and event.modifiers() == Qt.NoModifier:
+            href = self.anchorAt(event.pos())
+            if href:
+                self._pressed_link = (href, event.pos())
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        pressed = self._pressed_link
+        self._pressed_link = None
+        super().mouseReleaseEvent(event)
+        if (pressed is None or event.button() != Qt.LeftButton or event.modifiers() != Qt.NoModifier or
+                (event.pos() - pressed[1]).manhattanLength() >= QApplication.startDragDistance() or
+                self.textCursor().hasSelection() or self.anchorAt(event.pos()) != pressed[0]):
+            return
+        url = QUrl(pressed[0])
+        if url.isValid() and url.scheme().lower() in ('http', 'https') and url.host():
+            QDesktopServices.openUrl(url)
 
     def _resize_to_document(self, size=None):
         self.setFixedHeight(max(44, math.ceil(self.document().size().height()) + 24))
@@ -1261,6 +1282,7 @@ class PetPanel(QDialog):
         images = list(self.images)
         self.inflight_draft = {'mode': mode, 'cwd': self.cwd, 'text': draft_text, 'images': images,
                                'selected_thread': self.selected_thread if mode == 'task' else None}
+        draft = self.inflight_draft
         self.images.clear()
         self._show_images()
         names = '\n'.join(Path(path).name for path in images)
@@ -1272,8 +1294,14 @@ class PetPanel(QDialog):
                                        self.selected_thread if mode == 'task' else None,
                                        self.permission.currentData() if mode == 'task' and self.selected_thread else None,
                                        images or None)
-        if self.inflight_draft is not None:
-            self.inflight_draft['request_id'] = request_id
+        if self.inflight_draft is draft:
+            if request_id:
+                draft['request_id'] = request_id
+            else:
+                # Backend.send reports synchronous rejection with an error but
+                # cannot emit done because no worker was started. Reuse the
+                # ordinary failure path to restore the draft and UI controls.
+                self._event('done', {'mode': mode, 'status': 'failed'})
 
     def _append(self, text):
         self.transcript.append_response(text)
@@ -1586,7 +1614,8 @@ class PetPanel(QDialog):
             return
         params = data.get('params', {})
         allowed = params.get('availableDecisions') if method == 'item/commandExecution/requestApproval' else None
-        choices = ('accept', 'decline', 'cancel') if allowed is None else tuple(
+        choices = (('accept', 'decline') if method == 'item/permissions/requestApproval'
+                   else ('accept', 'decline', 'cancel')) if allowed is None else tuple(
             decision for decision in ('accept', 'decline', 'cancel')
             if isinstance(allowed, list) and decision in allowed)
         if not choices:

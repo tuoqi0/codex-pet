@@ -171,7 +171,7 @@ for line in sys.stdin:
                         time.sleep(.01)
                     self.assertTrue(marker.exists(), 'synthetic server did not enter read')
                     with b.active_lock:
-                        processes = list(b.history_processes)
+                        processes = list(b.pending_processes)
                     self.assertEqual(len(processes), 1)
                     started = time.monotonic()
                     b.close()
@@ -180,7 +180,7 @@ for line in sys.stdin:
                     self.assertIsNotNone(processes[0].poll())
                     self.assertIsNone(unrelated.poll())
                     with b.active_lock:
-                        self.assertFalse(b.history_processes)
+                        self.assertFalse(b.pending_processes)
             finally:
                 b.close()
                 unrelated.terminate()
@@ -210,7 +210,7 @@ for line in sys.stdin:
                         time.sleep(.01)
                     self.assertTrue(marker.exists())
                     with b.active_lock:
-                        processes = list(b.history_processes)
+                        processes = list(b.pending_processes)
                     self.assertEqual(len(processes), 1)
                     started = time.monotonic()
                     b.close()
@@ -218,8 +218,177 @@ for line in sys.stdin:
                     self.assertTrue(finished.wait(3))
                     self.assertIsNotNone(processes[0].poll())
                     with b.active_lock:
-                        self.assertFalse(b.history_processes)
+                        self.assertFalse(b.pending_processes)
             finally:
+                b.close()
+
+    def test_quit_reaps_turn_server_stuck_in_initialize(self):
+        import os
+        import subprocess
+        program = """#!/usr/bin/python3
+import signal, sys, time
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+for line in sys.stdin:
+    open(MARKER, 'w').write('initializing')
+    time.sleep(30)
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / 'synthetic-server'
+            marker = Path(directory) / 'initializing'
+            executable.write_text(program.replace('MARKER', repr(str(marker))))
+            executable.chmod(0o700)
+            events, done = [], threading.Event()
+            def emit(event, data):
+                events.append((event, data))
+                if event == 'done': done.set()
+            unrelated = subprocess.Popen(['/bin/sleep', '10'])
+            b = backend.Backend(emit, auth=FakeAuth(), executable=str(executable))
+            try:
+                with mock.patch.dict(os.environ, {'CODEX_HOME': directory}):
+                    b.send('task', 'test', directory)
+                    deadline = time.monotonic() + 5
+                    while not marker.exists() and time.monotonic() < deadline:
+                        time.sleep(.01)
+                    self.assertTrue(marker.exists())
+                    with b.active_lock:
+                        processes = list(b.pending_processes)
+                        self.assertEqual(b.active, 'starting')
+                    self.assertEqual(len(processes), 1)
+                    started = time.monotonic()
+                    b.close()
+                    self.assertLess(time.monotonic() - started, 2)
+                    self.assertTrue(done.wait(3), events)
+                    self.assertIsNotNone(processes[0].poll())
+                    self.assertEqual(events[-1], ('done', {'mode': 'task', 'status': 'interrupted'}))
+                    self.assertFalse(any(kind == 'error' for kind, _ in events))
+                    self.assertIsNone(unrelated.poll())
+                    with b.active_lock:
+                        self.assertFalse(b.pending_processes)
+            finally:
+                b.close()
+                unrelated.terminate()
+                unrelated.wait(timeout=2)
+
+    def test_cancel_during_turn_initialization_remains_interrupted(self):
+        import os
+        program = """#!/usr/bin/python3
+import sys, time
+for line in sys.stdin:
+    open(MARKER, 'w').write('initializing')
+    time.sleep(30)
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / 'synthetic-server'
+            marker = Path(directory) / 'initializing'
+            executable.write_text(program.replace('MARKER', repr(str(marker))))
+            executable.chmod(0o700)
+            events, done = [], threading.Event()
+            def emit(event, data):
+                events.append((event, data))
+                if event == 'done': done.set()
+            b = backend.Backend(emit, auth=FakeAuth(), executable=str(executable))
+            try:
+                with mock.patch.dict(os.environ, {'CODEX_HOME': directory}):
+                    b.send('task', 'test', directory)
+                    deadline = time.monotonic() + 5
+                    while not marker.exists() and time.monotonic() < deadline:
+                        time.sleep(.01)
+                    self.assertTrue(marker.exists())
+                    with b.active_lock:
+                        processes = list(b.pending_processes)
+                    self.assertEqual(len(processes), 1)
+                    started = time.monotonic()
+                    b.cancel()
+                    self.assertLess(time.monotonic() - started, .2)
+                    self.assertTrue(done.wait(4), events)
+                    self.assertEqual(events[-1], ('done', {'mode': 'task', 'status': 'interrupted'}))
+                    self.assertFalse(any(kind == 'error' for kind, _ in events))
+                    self.assertIsNotNone(processes[0].poll())
+                    with b.active_lock:
+                        self.assertFalse(b.pending_processes)
+            finally:
+                b.close()
+
+    def test_quit_reaps_concurrent_queries_stuck_in_initialize(self):
+        import os
+        import subprocess
+        program = """#!/usr/bin/python3
+import os, signal, sys, time
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+for line in sys.stdin:
+    open(os.path.join(MARKER, str(os.getpid())), 'w').write('initializing')
+    time.sleep(30)
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / 'synthetic-server'
+            markers = Path(directory) / 'markers'
+            markers.mkdir()
+            executable.write_text(program.replace('MARKER', repr(str(markers))))
+            executable.chmod(0o700)
+            finished = threading.Event()
+            events = []
+            expected = {'account_error', 'limits_error', 'models_error',
+                        'codex_threads_error', 'codex_thread_error'}
+            def emit(event, data):
+                events.append(event)
+                if expected.issubset(events):
+                    finished.set()
+            unrelated = subprocess.Popen(['/bin/sleep', '10'])
+            b = backend.Backend(emit, auth=FakeAuth(), executable=str(executable))
+            try:
+                with mock.patch.dict(os.environ, {'CODEX_HOME': directory}):
+                    b.account(); b.limits(); b.models('task'); b.codex_threads(); b.codex_thread('synthetic')
+                    deadline = time.monotonic() + 5
+                    while len(list(markers.iterdir())) < 5 and time.monotonic() < deadline:
+                        time.sleep(.01)
+                    self.assertEqual(len(list(markers.iterdir())), 5)
+                    with b.active_lock:
+                        processes = list(b.pending_processes)
+                    self.assertEqual(len(processes), 5)
+                    started = time.monotonic()
+                    b.close()
+                    self.assertLess(time.monotonic() - started, 1.5)
+                    self.assertTrue(finished.wait(3), events)
+                    self.assertTrue(all(process.poll() is not None for process in processes))
+                    self.assertIsNone(unrelated.poll())
+                    with b.active_lock:
+                        self.assertFalse(b.pending_processes)
+            finally:
+                b.close()
+                unrelated.terminate()
+                unrelated.wait(timeout=2)
+
+    def test_quit_waits_for_spawn_registration_before_taking_snapshot(self):
+        import os
+        import subprocess
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / 'synthetic-server'
+            executable.write_text('#!/usr/bin/python3\nimport time\ntime.sleep(30)\n')
+            executable.chmod(0o700)
+            entered, release, stopped = threading.Event(), threading.Event(), threading.Event()
+            real_popen = subprocess.Popen
+            def delayed_popen(*args, **kwargs):
+                entered.set()
+                self.assertTrue(release.wait(3))
+                return real_popen(*args, **kwargs)
+            b = backend.Backend(lambda *args: None, auth=FakeAuth(), executable=str(executable))
+            try:
+                with mock.patch.dict(os.environ, {'CODEX_HOME': directory}), \
+                        mock.patch.object(backend.subprocess, 'Popen', side_effect=delayed_popen):
+                    b.limits()
+                    self.assertTrue(entered.wait(3))
+                    closer = threading.Thread(target=lambda: (b.close(), stopped.set()))
+                    closer.start()
+                    self.assertFalse(stopped.wait(.05))
+                    release.set()
+                    self.assertTrue(stopped.wait(3))
+                    closer.join()
+                    deadline = time.monotonic() + 3
+                    while b.pending_processes and time.monotonic() < deadline:
+                        time.sleep(.01)
+                    self.assertFalse(b.pending_processes)
+            finally:
+                release.set()
                 b.close()
 
     def test_quit_rejects_new_work(self):
@@ -662,7 +831,7 @@ for line in sys.stdin:
             if event in ('limits', 'limits_error'):
                 finished.set()
         class Server:
-            def __init__(self, emit, executable=None): pass
+            def __init__(self, emit, executable=None, **kwargs): pass
             def request(self, method, params):
                 if method == 'account/read':
                     return {'account': {'type': 'chatgpt'}}
@@ -922,7 +1091,7 @@ for line in sys.stdin:
         class Server:
             last = None
             final_status = 'completed'
-            def __init__(self, emit, token, executable, stop_event=None):
+            def __init__(self, emit, token, executable, stop_event=None, **kwargs):
                 self.token, self.requests, self.mode, self.completed_turns = token, [], None, {}
                 Server.last = self
             def request(self, method, params):

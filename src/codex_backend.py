@@ -5,6 +5,7 @@ its event loop. Only official ChatGPT OAuth and Codex app-server are used.
 """
 import json
 from collections import OrderedDict
+from contextlib import contextmanager
 import base64
 import io
 import os
@@ -178,7 +179,7 @@ def discover_codex(home=None):
 
 
 class AppServer:
-    def __init__(self, emit, token=None, executable=None, stop_event=None, on_spawn=None):
+    def __init__(self, emit, token=None, executable=None, stop_event=None, process_factory=None):
         self.emit = emit
         self.stop_event = stop_event
         binary = executable or discover_codex()
@@ -210,8 +211,9 @@ class AppServer:
                      '-c', 'mcp_servers={}']
         else:
             args += ['-c', 'model_provider="openai"']
-        self.process = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                        stderr=subprocess.DEVNULL, text=True, env=env, bufsize=1)
+        factory = process_factory or subprocess.Popen
+        self.process = factory(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                               stderr=subprocess.DEVNULL, text=True, env=env, bufsize=1)
         self.events = queue.Queue()
         self.write_lock = threading.Lock()
         self.counter = 0
@@ -223,9 +225,7 @@ class AppServer:
         self.mode = None
         threading.Thread(target=self._read, daemon=True).start()
         try:
-            if on_spawn is not None:
-                on_spawn(self.process)
-            self.request('initialize', {'clientInfo': {'name': 'codex_pet', 'title': 'Codex Pet', 'version': '2.12.0'}, 'capabilities': {'experimentalApi': True}})
+            self.request('initialize', {'clientInfo': {'name': 'codex_pet', 'title': 'Codex Pet', 'version': '2.13.0'}, 'capabilities': {'experimentalApi': True}})
             self.write({'method': 'initialized', 'params': {}})
         except Exception:
             self.close()
@@ -272,6 +272,9 @@ class AppServer:
             except queue.Empty:
                 continue
             if event is None:
+                if (self.stop_event and self.stop_event.is_set()
+                        and method not in ('turn/start', 'turn/interrupt')):
+                    raise CancelledBeforeTurn()
                 if cancel_deadline is not None:
                     raise TurnStateUnknown('停止请求未得到确认；任务执行状态未知。')
                 raise RuntimeError('Codex App Server 已退出。')
@@ -514,7 +517,7 @@ class Backend:
         self.response = None
         self.worker = None
         self.closing = False
-        self.history_processes = set()
+        self.pending_processes = set()
         self.history = []
         self.history_image_bytes = 0
         self.threads = {}
@@ -530,6 +533,37 @@ class Backend:
                 self.emit(error_event, str(exc))
         threading.Thread(target=run, daemon=True).start()
 
+    def _tracked_process_factory(self, registered):
+        def spawn(*args, **kwargs):
+            # Close and spawning must be atomic: otherwise a server can appear
+            # just after close() snapshots the set of children to terminate.
+            with self.active_lock:
+                if self.closing:
+                    raise RuntimeError('应用正在退出。')
+                process = subprocess.Popen(*args, **kwargs)
+                self.pending_processes.add(process)
+                registered.append(process)
+                return process
+        return spawn
+
+    @contextmanager
+    def _query_server(self):
+        """Track a short-lived query server even while it initializes."""
+        registered = []
+        server = None
+        try:
+            server = AppServer(self.emit, executable=self.executable,
+                               process_factory=self._tracked_process_factory(registered))
+            yield server
+        finally:
+            try:
+                if server is not None:
+                    server.close()
+            finally:
+                with self.active_lock:
+                    for process in registered:
+                        self.pending_processes.discard(process)
+
     def login(self):
         def run():
             self.emit('status', '请在浏览器完成 ChatGPT 授权。')
@@ -541,24 +575,18 @@ class Backend:
     def account(self):
         def run():
             self.emit('account', self.auth.account())
-            server = AppServer(self.emit, executable=self.executable)
-            try:
+            with self._query_server() as server:
                 account = server.request('account/read', {'refreshToken': False}).get('account')
                 self.emit('account', {'source': 'Codex', 'account': account})
-            finally:
-                server.close()
         self._async(run, 'account_error')
 
     def limits(self):
         def run():
-            server = AppServer(self.emit, executable=self.executable)
-            try:
+            with self._query_server() as server:
                 account = server.request('account/read', {'refreshToken': False}).get('account')
                 if not account or account.get('type') != 'chatgpt':
                     raise RuntimeError('Codex 未以 ChatGPT 账户登录；不会使用 API key。')
                 result = server.request('account/rateLimits/read', {})
-            finally:
-                server.close()
             self.emit('limits', result)
         self._async(run, 'limits_error')
 
@@ -569,11 +597,8 @@ class Backend:
             return
         if account is None:
             try:
-                server = AppServer(self.emit, executable=self.executable)
-                try:
+                with self._query_server() as server:
                     account = server.request('account/read', {'refreshToken': False}).get('account')
-                finally:
-                    server.close()
             except Exception:
                 self.emit('status', '无法读取 Codex 账户，两个账户是否一致尚未验证。')
                 return
@@ -600,8 +625,7 @@ class Backend:
                                'name': entry.get('display_name') or entry['slug']}
                               for entry in entries]
                 else:
-                    server = AppServer(self.emit, executable=self.executable)
-                    try:
+                    with self._query_server() as server:
                         account = server.request('account/read', {'refreshToken': False}).get('account')
                         if not account or account.get('type') != 'chatgpt':
                             raise RuntimeError('Codex 未以 ChatGPT 账户登录；不会使用 API key。')
@@ -622,8 +646,6 @@ class Backend:
                             cursor = result.get('nextCursor')
                             if not cursor:
                                 break
-                    finally:
-                        server.close()
                 if not models:
                     raise RuntimeError('账户没有返回可选择的模型。')
                 self.emit('models', {'mode': mode, 'generation': generation, 'models': models})
@@ -647,8 +669,7 @@ class Backend:
     def codex_threads(self, cursor=None):
         """List local Codex sessions only after the user opens the session picker."""
         def run():
-            server = AppServer(self.emit, executable=self.executable)
-            try:
+            with self._query_server() as server:
                 account = server.request('account/read', {'refreshToken': False}).get('account')
                 if not account or account.get('type') != 'chatgpt':
                     raise RuntimeError('Codex 未以 ChatGPT 账户登录；不会使用 API key。')
@@ -656,8 +677,6 @@ class Backend:
                 if cursor:
                     params['cursor'] = cursor
                 result = server.request('thread/list', params)
-            finally:
-                server.close()
             self.emit('codex_threads', result)
         self._async(run, 'codex_threads_error')
 
@@ -666,19 +685,7 @@ class Backend:
         def run():
             if not thread_id:
                 raise RuntimeError('请选择 Codex 对话。')
-            registered = []
-            def register(process):
-                with self.active_lock:
-                    if self.closing:
-                        raise RuntimeError('应用正在退出。')
-                    self.history_processes.add(process)
-                    registered.append(process)
-            server = None
-            try:
-                with self.active_lock:
-                    if self.closing:
-                        raise RuntimeError('应用正在退出。')
-                server = AppServer(self.emit, executable=self.executable, on_spawn=register)
+            with self._query_server() as server:
                 account = server.request('account/read', {'refreshToken': False}).get('account')
                 if not account or account.get('type') != 'chatgpt':
                     raise RuntimeError('Codex 未以 ChatGPT 账户登录；不会使用 API key。')
@@ -713,14 +720,6 @@ class Backend:
                     seen.add(cursor)
                     if len(seen) >= MAX_HISTORY_PAGES:
                         raise RuntimeError('此 Codex 对话过长，超过桌宠一次读取上限；原有显示和草稿未更改。')
-            finally:
-                try:
-                    if server is not None:
-                        server.close()
-                finally:
-                    with self.active_lock:
-                        for process in registered:
-                            self.history_processes.discard(process)
             self.emit('codex_thread', result)
         self._async(run, 'codex_thread_error')
 
@@ -865,13 +864,27 @@ class Backend:
         if not directory.is_dir():
             raise RuntimeError('请选择有效的工作目录。')
         token = self.auth.token() if mode == 'plan' else None
-        server = AppServer(self.emit, token=token, executable=self.executable, stop_event=self.cancelled)
+        # Track the process before initialize can block. Once initialized,
+        # transfer it to the active turn under the same lock used by close().
+        registered = []
+        try:
+            server = AppServer(self.emit, token=token, executable=self.executable,
+                               stop_event=self.cancelled,
+                               process_factory=self._tracked_process_factory(registered))
+        except Exception:
+            with self.active_lock:
+                for process in registered:
+                    self.pending_processes.discard(process)
+            raise
         server.mode = mode
         snapshots = None
         with self.active_lock:
+            for process in registered:
+                self.pending_processes.discard(process)
             self.active = server
+            closing = self.closing
         try:
-            if self.cancelled.is_set():
+            if closing or self.cancelled.is_set():
                 raise CancelledBeforeTurn()
             if mode == 'task':
                 account = server.request('account/read', {'refreshToken': False}).get('account')
@@ -1036,29 +1049,30 @@ class Backend:
     def close(self):
         with self.active_lock:
             self.closing = True
-            history_processes = list(self.history_processes)
-        # These are only short-lived servers created for explicit history reads.
+            pending_processes = list(self.pending_processes)
+        self.cancel()
+        # Only this backend's query servers and initializing turn servers are
+        # registered; never touch unrelated Codex processes.
         # Terminate them together and cap the total UI-thread wait.
-        for process in history_processes:
+        for process in pending_processes:
             if process.poll() is None:
                 try:
                     process.terminate()
                 except ProcessLookupError:
                     pass
         deadline = time.monotonic() + .5
-        for process in history_processes:
+        for process in pending_processes:
             if process.poll() is None:
                 try:
                     process.wait(timeout=max(0, deadline - time.monotonic()))
                 except subprocess.TimeoutExpired:
                     pass
-        for process in history_processes:
+        for process in pending_processes:
             if process.poll() is None:
                 try:
                     process.kill()
                 except ProcessLookupError:
                     pass
-        self.cancel()
         with self.active_lock:
             worker = self.worker
         if not worker or worker is threading.current_thread():

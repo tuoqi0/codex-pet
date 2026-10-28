@@ -145,6 +145,9 @@ class CodexPet(QWidget):
                 self.drag_moved = True
                 self.click_timer.stop()
                 self.speech.hide()
+                # A drag dismisses the current exchange, including any reply
+                # still waiting in a single-shot timer.
+                self.reaction_serial += 1
                 now = time.monotonic()
                 self.behavior.begin_drag(now)
                 self.drag_motion.begin(now, self.press_global.x())
@@ -374,6 +377,7 @@ class QPet(QWidget):
                 self.drag_moved = True
                 self.click_timer.stop()
                 self.speech.hide()
+                self.reaction_serial += 1
                 self.player.play('drag')
                 if self.wayland and self.windowHandle():
                     self.windowHandle().startSystemMove()
@@ -513,6 +517,7 @@ class PetManager:
         self._watch_screens()
         self.next_interaction = time.monotonic() + 12.0
         self.next_interaction_speaker = 'dragon'
+        self.user_interaction_serial = 0
         self.interaction_timer = QTimer(self.dragon)
         self.interaction_timer.timeout.connect(self.maybe_interact)
         self.interaction_timer.start(1000)
@@ -615,11 +620,13 @@ class PetManager:
         q_visible = self.qpet and self.qpet.isVisible()
         return ((dragon_visible or q_visible)
                 and (not dragon_visible or (self.dragon.press_global is None
+                     and not self.dragon.click_timer.isActive()
                      and not self.dragon.speech.isVisible()
                      and now >= self.dragon.behavior.reaction_until))
                 and (not self.panel or not self.panel.busy)
                 and (not q_visible
                      or (self.qpet.press_global is None and self.qpet.player.current == 'idle'
+                         and not self.qpet.click_timer.isActive()
                          and now >= self.qpet.message_until)))
 
     def companion_tick(self):
@@ -637,12 +644,19 @@ class PetManager:
                 self.qpet.player.play(animation)
                 reply = {'break': '我也陪你休息。', 'water': '记得喝点水哦。',
                          'meal': '吃点好吃的吧！', 'greeting': '我也在这里！'}.get(event.action, '我在这里！')
+                dragon_serial = self.dragon.reaction_serial
+                qpet_serial = self.qpet.reaction_serial
 
                 def q_reply():
                     if (self.companion.settings.enabled and time.monotonic() >= self.companion.paused_until
                             and not self.companion._quiet(datetime.now())
                             and (not self.panel or not self.panel.busy)
+                            and self.dragon.isVisible() and self.dragon.press_global is None
+                            and not self.dragon.click_timer.isActive()
+                            and self.dragon.reaction_serial == dragon_serial
                             and self.qpet and self.qpet.isVisible() and self.qpet.press_global is None
+                            and not self.qpet.click_timer.isActive()
+                            and self.qpet.reaction_serial == qpet_serial
                             and self.qpet.player.current in (animation, 'idle')):
                         self.qpet.reaction_serial += 1
                         self.qpet.message = reply
@@ -785,6 +799,7 @@ class PetManager:
                 or not qpet or not dragon.isVisible()
                 or not qpet.isVisible() or dragon.press_global is not None
                 or qpet.press_global is not None
+                or dragon.click_timer.isActive() or qpet.click_timer.isActive()
                 or qpet.player.current not in (('idle', q_reaction_animation or '01')
                                                if allow_q_reaction else ('idle',))
                 or (not allow_dragon_reaction and time.monotonic() < dragon.behavior.reaction_until)):
@@ -811,8 +826,12 @@ class PetManager:
             return
         self.next_interaction = time.monotonic() + self.dragon.behavior.rng.uniform(35.0, 55.0)
         serial = source.reaction_serial
+        target = self.qpet if source is self.dragon else self.dragon
+        target_serial = target.reaction_serial
 
         def reply_if_ready():
+            if target.reaction_serial != target_serial:
+                return
             if source is self.dragon:
                 if (self.dragon.reaction_serial == serial
                         and self.interaction_ready(allow_dragon_reaction=True, user_initiated=True)):
@@ -822,6 +841,69 @@ class PetManager:
                 self.dragon.react('我也在这里陪你。')
 
         QTimer.singleShot(1200, reply_if_ready)
+
+    def _user_response(self, pet, message, pose, animation):
+        if not pet or not pet.isVisible() or pet.press_global is not None:
+            return False
+        working = (self.dragon.behavior.activity == 'work' or
+                   (self.panel and self.panel.busy and self.panel.active_mode in ('plan', 'task')))
+        if pet is self.dragon:
+            if not working:
+                pet.react(message, pose)
+                return True
+            # A requested response is allowed during a task, but it must not
+            # replace the working pose or change the task state.
+            pet.reaction_serial += 1
+            pet.speech.show_message(message, pet)
+            return True
+        if not working:
+            chosen = animation if animation in pet.player.entries else '01'
+            if pet.respond(message, chosen):
+                return True
+        # Keep work/drag animation intact; also allow a text reply if an
+        # optional Q animation is unavailable.
+        pet.reaction_serial += 1
+        pet.message = message
+        pet.message_until = time.monotonic() + pet.speech.show_message(message, pet) / 1000
+        return True
+
+    def user_interaction(self, source, action):
+        choices = {
+            'tea': (('来，一起喝杯茶，歇一会儿。', 'tea'), ('我也陪你喝茶！', '14')),
+            'encourage': (('你已经做得很好了，我们慢慢来。', 'wave'), ('加油！我相信你！', '20')),
+            'happy': (('开心一下，让我陪着你！', 'happy'), ('一起开心！', '18')),
+        }
+        if (source is not self.dragon and (not self.qpet or source is not self.qpet)) or action not in choices:
+            return
+        if not source.isVisible() or source.press_global is not None:
+            return
+        # A context-menu action supersedes a pending single click. Otherwise
+        # its delayed greeting can overwrite this choice and cancel the reply.
+        source.click_timer.stop()
+        dragon, qpet = choices[action]
+        replies = {self.dragon: (dragon[0], dragon[1], '01')}
+        if self.qpet:
+            replies[self.qpet] = (qpet[0], 'wave', qpet[1])
+        if not self._user_response(source, *replies[source]):
+            return
+        self.user_interaction_serial += 1
+        interaction_serial = self.user_interaction_serial
+        source_serial = source.reaction_serial
+        other = self.qpet if source is self.dragon else self.dragon
+        self.next_interaction = time.monotonic() + self.dragon.behavior.rng.uniform(35.0, 55.0)
+        if not other or not other.isVisible():
+            return
+        other_serial = other.reaction_serial
+
+        def reply_if_ready():
+            if (self.user_interaction_serial == interaction_serial and source.isVisible()
+                    and other.isVisible() and source.reaction_serial == source_serial
+                    and other.reaction_serial == other_serial
+                    and source.press_global is None and other.press_global is None
+                    and not source.click_timer.isActive() and not other.click_timer.isActive()):
+                self._user_response(other, *replies[other])
+
+        QTimer.singleShot(900, reply_if_ready)
 
     def maybe_interact(self):
         now = time.monotonic()
@@ -842,10 +924,12 @@ class PetManager:
             ))
             self.dragon.react(greeting, pose)
             serial = self.dragon.reaction_serial
+            target_serial = self.qpet.reaction_serial
             self.next_interaction_speaker = 'qpet'
 
             def reply_if_ready():
                 if (self.dragon.reaction_serial == serial
+                        and self.qpet.reaction_serial == target_serial
                         and self.interaction_ready(allow_dragon_reaction=True)):
                     self.qpet.respond(reply, animation if animation in self.qpet.player.entries else '01')
         else:
@@ -860,10 +944,12 @@ class PetManager:
                 self.next_interaction = now + 10.0
                 return
             serial = self.qpet.reaction_serial
+            target_serial = self.dragon.reaction_serial
             self.next_interaction_speaker = 'dragon'
 
             def reply_if_ready():
                 if (self.qpet.reaction_serial == serial
+                        and self.dragon.reaction_serial == target_serial
                         and self.interaction_ready(allow_q_reaction=True,
                                                    q_reaction_animation=animation)):
                     self.dragon.react(reply, pose)
@@ -873,6 +959,9 @@ class PetManager:
 
     def populate_menu(self, menu, current):
         menu.addSeparator()
+        interactions = menu.addMenu('一起互动')
+        for label, action in (('一起喝茶', 'tea'), ('给我鼓励', 'encourage'), ('开心一下', 'happy')):
+            interactions.addAction(label, lambda checked=False, value=action: self.user_interaction(current, value))
         menu.addAction('对话与任务', lambda: self.open_panel('chat'))
         menu.addAction('查看额度', lambda: self.open_panel('limits'))
         sizes = menu.addMenu('角色大小')

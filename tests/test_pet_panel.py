@@ -99,6 +99,55 @@ class PanelTests(unittest.TestCase):
                               'params': {'availableDecisions': ['accept']}})
         self.assertEqual(self.panel.backend.calls[-1], ('approve', 3, 'unsupported'))
 
+    def test_additional_permission_approval_does_not_offer_unimplemented_stop(self):
+        observed = []
+        def reject():
+            dialog = QApplication.activeModalWidget()
+            observed.extend(button.text() for button in dialog.findChildren(QPushButton))
+            dialog.reject()
+        QTimer.singleShot(0, reject)
+        self.panel._approval({'id': 4, 'method': 'item/permissions/requestApproval',
+                              'params': {'permissions': {'network': {'enabled': True}}}})
+        self.assertEqual(set(observed), {'允许', '拒绝'})
+        self.assertEqual(self.panel.backend.calls[-1], ('approve', 4, 'decline'))
+
+    def test_synchronous_send_rejection_restores_draft_and_controls(self):
+        self.panel.prompt.setPlainText('  原始草稿  ')
+        self.panel.images = ['/tmp/example.png']
+        def reject(*args):
+            self.panel.bridge.received.emit('error', '已有请求正在运行。')
+            return None
+        self.panel.backend.send = reject
+        self.panel._send()
+        self.assertFalse(self.panel.busy)
+        self.assertTrue(self.panel.send_button.isEnabled())
+        self.assertFalse(self.panel.cancel_button.isEnabled())
+        self.assertEqual(self.panel.prompt.toPlainText(), '  原始草稿  ')
+        self.assertEqual(self.panel.images, ['/tmp/example.png'])
+        self.assertIsNone(self.panel.inflight_draft)
+        self.assertIn('已有请求正在运行', self.panel.status.text())
+
+    def test_synchronous_rejection_preserves_new_draft_and_completed_signal(self):
+        self.panel.prompt.setPlainText('原始草稿')
+        def reject_after_edit(*args):
+            self.panel.prompt.setPlainText('新草稿')
+            self.panel.bridge.received.emit('error', '拒绝')
+            return None
+        self.panel.backend.send = reject_after_edit
+        self.panel._send()
+        self.assertEqual(self.panel.prompt.toPlainText(), '新草稿')
+        self.assertEqual(self.panel.failed_drafts[0]['text'], '原始草稿')
+        self.assertFalse(self.panel.busy)
+
+        def complete_synchronously(*args):
+            self.panel.bridge.received.emit('done', {'mode': 'chat', 'status': 'completed'})
+            return None
+        self.panel.backend.send = complete_synchronously
+        self.panel._send()
+        self.assertEqual(self.panel.status.text(), '完成')
+        self.assertEqual(len(self.panel.failed_drafts), 1)
+        self.assertFalse(self.panel.busy)
+
     def test_file_approval_displays_matched_diff_or_unavailable_reason(self):
         from PyQt5.QtWidgets import QPlainTextEdit
         observed = []

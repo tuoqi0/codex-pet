@@ -35,15 +35,17 @@ def _source_point(x, y, phase):
     width, height = _ART_SIZE
     nx, ny = (x - _MARGIN_X) / width, (y - _MARGIN_Y) / height
     left = _band(.10, .18, .30, .39, ny) * (1.0 - _smoothstep(.36, .49, nx))
-    right = _band(.12, .22, .35, .48, ny) * _smoothstep(.69, .82, nx)
-    tail = _band(.53, .67, 1.00, 1.08, ny) * _smoothstep(.68, .86, nx)
+    # Broad ramps let the right wing and tail travel farther without folding
+    # the mesh; the left wing remains limited by the adjacent knee.
+    right = _band(-.10, .23, .35, .56, ny) * _smoothstep(.69, .82, nx)
+    tail = _band(.38, .68, 1.00, 1.30, ny) * _smoothstep(.68, .86, nx)
     wing_phase = math.sin(phase)
     tail_phase = math.sin(phase + .8)
     # Gentle amplitudes and broad ramps keep each mesh cell oriented: stronger
     # fields fold the flattened wing membrane and reveal transparent holes.
-    return (x + width * .035 * tail * tail_phase,
-            y + height * (.04 * left + .05 * right) * wing_phase
-            + height * .035 * tail * tail_phase)
+    return (x + width * .045 * tail * tail_phase,
+            y + height * (.04 * left + .075 * right) * wing_phase
+            + height * .045 * tail * tail_phase)
 
 
 def _prepare_art(path):

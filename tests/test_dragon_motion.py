@@ -87,6 +87,11 @@ class DragonMotionTests(unittest.TestCase):
                 for frame in frames:
                     self.assertEqual(frame.size(), expected)
                     self.assert_frame_edges_transparent(frame)
+                for area in ((159, 39, 185, 65), (106, 86, 130, 101),
+                             (163, 65, 188, 115)):
+                    baseline = render(frames[0]).crop(area).tobytes()
+                    for frame in (frames[6], frames[12], frames[18]):
+                        self.assertEqual(render(frame).crop(area).tobytes(), baseline)
 
     def test_wings_and_tail_move_visibly_at_default_size(self):
         phases = [self.renders[index] for index in (0, 6, 12, 18)]
@@ -94,8 +99,17 @@ class DragonMotionTests(unittest.TestCase):
         right = [visible_bounds(image, (218, 23, 295, 92)) for image in phases]
         tail = [visible_bounds(image, (230, 120, 299, 181)) for image in phases]
         self.assertGreaterEqual(max(b[1] for b in left) - min(b[1] for b in left), 3)
-        self.assertGreaterEqual(max(b[1] for b in right) - min(b[1] for b in right), 4)
-        self.assertGreaterEqual(max(b[2] for b in tail) - min(b[2] for b in tail), 5)
+        self.assertGreaterEqual(max(b[1] for b in right) - min(b[1] for b in right), 8)
+        self.assertGreaterEqual(max(b[2] for b in tail) - min(b[2] for b in tail), 12)
+
+    def test_motion_extents_remain_continuous_at_default_size(self):
+        # Include the last-to-first transition: a seamless 24-frame cycle.
+        for area, axis in (((83, 23, 136, 76), 1),
+                           ((218, 23, 295, 92), 1),
+                           ((230, 120, 299, 181), 2)):
+            positions = [visible_bounds(image, area)[axis] for image in self.renders]
+            for current, following in zip(positions, positions[1:] + positions[:1]):
+                self.assertLessEqual(abs(following - current), 4)
 
     def test_face_and_knees_do_not_move_between_motion_frames(self):
         for area in ((159, 39, 185, 65), (106, 86, 130, 101), (163, 65, 188, 115)):
