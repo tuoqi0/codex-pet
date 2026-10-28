@@ -9,9 +9,10 @@ import time
 
 from PIL import Image, ImageDraw, ImageFilter
 from PyQt5.QtCore import QObject, QPointF, QRectF, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QColor, QImage, QPainter, QPixmap
+from PyQt5.QtGui import QColor, QPainter
 from PyQt5.QtWidgets import QApplication, QMenu, QWidget
 
+from dragon_motion import motion_frames
 from pet_behavior import PetBehavior
 
 
@@ -38,49 +39,6 @@ def wave_alternate(base_path, alternate_path):
     mask = mask.filter(ImageFilter.GaussianBlur(max(1, round(width * .004))))
     return Image.composite(alternate, base, mask)
 
-
-def motion_frames(path):
-    """Gently deform the outer wing and tail regions of the flat illustration.
-
-    The source is not layered: this is a small mesh warp, not skeletal motion.
-    The centre and joins remain fixed, and a single complete image is drawn per
-    frame so pose changes never overlay two translucent faces.
-    """
-    if isinstance(path, Image.Image):
-        original = path.convert('RGBA')
-    else:
-        with Image.open(path) as source:
-            original = source.convert('RGBA')
-    original.thumbnail((560, 694), Image.Resampling.LANCZOS)
-    width, height = original.size
-    frames = []
-    for index in range(12):
-        phase = 2 * math.pi * index / 12
-
-        def point(x, y):
-            nx, ny = x / width, y / height
-            wing = max(0.0, (.375 - nx) / .375, (nx - .66) / .34)
-            wing *= math.sin(math.pi * (ny - .12) / .34) if .12 < ny < .46 else 0
-            tail = max(0.0, (nx - .70) / .30)
-            tail *= math.sin(math.pi * (ny - .48) / .46) if .48 < ny < .94 else 0
-            return (x + width * .055 * tail * math.sin(phase + .8),
-                    y + height * .10 * wing * math.sin(phase)
-                    + height * .035 * tail * math.sin(phase + .8))
-
-        mesh = []
-        xs = [round(width * n / 16) for n in range(17)]
-        ys = [round(height * n / 24) for n in range(25)]
-        for x0, x1 in zip(xs, xs[1:]):
-            for y0, y1 in zip(ys, ys[1:]):
-                quad = (*point(x0, y0), *point(x0, y1),
-                        *point(x1, y1), *point(x1, y0))
-                mesh.append(((x0, y0, x1, y1), quad))
-        warped = original.transform(original.size, Image.Transform.MESH, mesh,
-                                    resample=Image.Resampling.BICUBIC)
-        data = warped.tobytes()
-        image = QImage(data, width, height, width * 4, QImage.Format_RGBA8888).copy()
-        frames.append(QPixmap.fromImage(image))
-    return frames
 
 
 class CodexPet(QWidget):
@@ -153,6 +111,7 @@ class CodexPet(QWidget):
             if not self.drag_moved and (event.globalPos() - self.press_global).manhattanLength() >= QApplication.startDragDistance():
                 self.drag_moved = True
                 self.click_timer.stop()
+                self.speech.hide()
                 self.behavior.begin_drag()
                 if self.wayland and self.windowHandle():
                     self.windowHandle().startSystemMove()
@@ -183,7 +142,7 @@ class CodexPet(QWidget):
 
     def contextMenuEvent(self, event):
         menu = QMenu(self)
-        menu.addAction('打招呼', self.react)
+        menu.addAction('打招呼', lambda: self.greet())
         patrol = menu.addAction('桌面巡遊（左右移動）')
         patrol.setCheckable(True)
         patrol.setChecked(self.behavior.patrol)
@@ -338,6 +297,7 @@ class QPet(QWidget):
             if not self.drag_moved and (event.globalPos() - self.press_global).manhattanLength() >= QApplication.startDragDistance():
                 self.drag_moved = True
                 self.click_timer.stop()
+                self.speech.hide()
                 self.player.play('drag')
                 if self.wayland and self.windowHandle():
                     self.windowHandle().startSystemMove()
@@ -363,7 +323,7 @@ class QPet(QWidget):
 
     def contextMenuEvent(self, event):
         menu = QMenu(self)
-        menu.addAction('打招呼', lambda: self.player.play('01'))
+        menu.addAction('打招呼', lambda: self.greet())
         self.manager.populate_menu(menu, self)
         menu.addSeparator()
         menu.addAction('退出', QApplication.quit)
@@ -616,12 +576,16 @@ class PetManager:
             return False
         # Qt cannot reliably establish absolute window positions on Wayland.
         if ((self.panel and self.panel.busy)
-                or not qpet or dragon.wayland or qpet.wayland or not dragon.isVisible()
+                or not qpet or not dragon.isVisible()
                 or not qpet.isVisible() or dragon.press_global is not None
                 or qpet.press_global is not None
                 or qpet.player.current not in (('idle', '01') if allow_q_reaction else ('idle',))
                 or (not allow_dragon_reaction and time.monotonic() < dragon.behavior.reaction_until)):
             return False
+        if dragon.wayland or qpet.wayland:
+            # Only an explicit greeting can be answered without reliable
+            # absolute positions; unsolicited chat still needs proximity.
+            return user_initiated
         a, b = dragon.frameGeometry(), qpet.frameGeometry()
         dx = max(a.left() - b.right() - 1, b.left() - a.right() - 1, 0)
         dy = max(a.top() - b.bottom() - 1, b.top() - a.bottom() - 1, 0)

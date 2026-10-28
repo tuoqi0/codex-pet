@@ -221,6 +221,7 @@ class PetPanel(QDialog):
         self.thread_loading = False
         self.thread_cursor = None
         self.thread_reading = None
+        self.thread_refreshing = False
         self.images = []
         self.images_after_login_need_review = False
         self.inflight_draft = None
@@ -339,6 +340,11 @@ class PetPanel(QDialog):
         self.threads_button.setObjectName('compact')
         self.threads_button.clicked.connect(self._open_threads)
         model_options.addWidget(self.threads_button)
+        self.thread_refresh = QPushButton('刷新已選對話')
+        self.thread_refresh.setObjectName('compact')
+        self.thread_refresh.setToolTip('只重新讀取已選 Codex 對話；不發送消息或執行任務。')
+        self.thread_refresh.clicked.connect(self._refresh_thread)
+        model_options.addWidget(self.thread_refresh)
         card_layout.addLayout(model_options)
         self.notice = QLabel()
         self.notice.setObjectName('notice')
@@ -666,9 +672,11 @@ class PetPanel(QDialog):
         self.permission_label.setVisible(visible)
         self.permission.setVisible(visible)
         self.permission_notice.setVisible(visible)
+        self.thread_refresh.setVisible(visible)
+        self.thread_refresh.setEnabled(visible and not self.busy and not self.thread_loading)
 
     def _new_conversation(self):
-        if self.busy:
+        if self.busy or self.thread_loading:
             return
         mode = self.mode.currentData()
         self.backend.new_thread(mode, self.cwd)
@@ -684,7 +692,7 @@ class PetPanel(QDialog):
         self.status.setText('已開始新對話；原有 Codex 歷史不會刪除。')
 
     def _choose_cwd(self):
-        if self.busy:
+        if self.busy or self.thread_loading:
             return
         selected = QFileDialog.getExistingDirectory(self, '選擇工作目錄', self.cwd or str(Path.home()))
         if selected:
@@ -851,26 +859,59 @@ class PetPanel(QDialog):
         self.thread_open.setEnabled(True)
         self.thread_status.setText('請選擇對話後點擊讀取。' if self.thread_list.count() else '沒有找到 Codex 對話。')
 
+    def _refresh_thread(self):
+        if (self.busy or self.thread_loading or self.thread_dialog is not None or
+                not self.selected_thread or self.mode.currentData() != 'task'):
+            return
+        self.thread_reading = self.selected_thread
+        self.thread_loading = True
+        self.thread_refreshing = True
+        self._show_permission()
+        self.status.setText('正在刷新已選對話…')
+        self.backend.codex_thread(self.thread_reading)
+
     def _show_thread(self, result):
         if not self.thread_loading or not self.thread_reading:
             return
-        if self.thread_dialog is None:
+        refreshing = self.thread_refreshing
+        if self.thread_dialog is None and not refreshing:
             self.thread_loading = False
             self.thread_reading = None
             return
-        thread = result.get('thread') or {}
-        if thread.get('id') != self.thread_reading or not thread.get('cwd'):
+        thread = result.get('thread') if isinstance(result, dict) else None
+        invalid = not isinstance(thread, dict)
+        if not invalid:
+            turns = thread.get('turns')
+            invalid = (thread.get('id') != self.thread_reading or not thread.get('cwd') or
+                       (refreshing and (self.selected_thread != self.thread_reading or self.cwd != thread['cwd'])) or
+                       not isinstance(turns, list))
+        if not invalid:
+            for turn in turns:
+                if not isinstance(turn, dict) or not isinstance(turn.get('items'), list):
+                    invalid = True
+                    break
+                for item in turn['items']:
+                    if not isinstance(item, dict) or (item.get('type') == 'userMessage' and
+                                                     not isinstance(item.get('content'), list)) or (
+                            item.get('type') == 'fileChange' and item.get('changes') is not None and
+                            not isinstance(item.get('changes'), list)):
+                        invalid = True
+                        break
+                if invalid:
+                    break
+        if invalid:
             self.thread_loading = False
             self.thread_reading = None
-            self.thread_open.setEnabled(True)
-            self.thread_status.setText('無法確認對話或工作目錄，請重試。')
+            self.thread_refreshing = False
+            if refreshing:
+                self.status.setText('無法確認已選對話或工作目錄，刷新失敗。')
+                self._show_permission()
+            else:
+                self.thread_open.setEnabled(True)
+                self.thread_status.setText('無法確認對話或工作目錄，請重試。')
             return
-        if self.cwd != thread['cwd']:
-            self.backend.new_thread('plan', thread['cwd'])
-            self.transcripts['plan'].clear()
-        transcript = self.transcripts['task']
-        transcript.clear()
-        for turn in thread.get('turns', []):
+        messages = []
+        for turn in turns:
             for item in turn.get('items', []):
                 kind = item.get('type')
                 if kind == 'userMessage':
@@ -881,14 +922,14 @@ class PetPanel(QDialog):
                         if part.get('type') in ('image', 'localImage', 'input_image'):
                             parts.append('[圖片]')
                         elif part.get('text'):
-                            parts.append(part['text'])
+                            parts.append(str(part['text']))
                     text = '\n'.join(part for part in parts if part)
                     if text:
-                        transcript.add_message('user', text)
+                        messages.append(('user', text))
                 elif kind == 'agentMessage' and item.get('text'):
-                    transcript.add_message('assistant', item['text'])
+                    messages.append(('assistant', str(item['text'])))
                 elif kind == 'plan' and item.get('text'):
-                    transcript.add_message('assistant', '[歷史計劃]\n' + str(item['text']))
+                    messages.append(('assistant', '[歷史計劃]\n' + str(item['text'])))
                 elif kind in ('commandExecution', 'fileChange', 'webSearch',
                               'mcpToolCall', 'dynamicToolCall', 'contextCompaction'):
                     labels = {'commandExecution': '命令', 'fileChange': '文件變更',
@@ -908,7 +949,21 @@ class PetPanel(QDialog):
                         tool = ' / '.join(str(item[key]) for key in ('server', 'tool') if item.get(key))
                         if tool:
                             summary += '\n' + tool
-                    transcript.add_message('assistant', summary)
+                    messages.append(('assistant', summary))
+        if self.cwd != thread['cwd']:
+            self.backend.new_thread('plan', thread['cwd'])
+            self.transcripts['plan'].clear()
+        transcript = self.transcripts['task']
+        transcript.clear()
+        for role, text in messages:
+            transcript.add_message(role, text)
+        if refreshing:
+            self.thread_loading = False
+            self.thread_reading = None
+            self.thread_refreshing = False
+            self._show_permission()
+            self.status.setText('已刷新所選 Codex 對話；草稿和本次權限保持不變。')
+            return
         self.cwd = thread['cwd']
         self.project_label.setText(self.cwd)
         self.selected_thread = thread['id']
@@ -927,7 +982,7 @@ class PetPanel(QDialog):
         draft_text = self.prompt.toPlainText()
         text = draft_text.strip()
         mode = self.mode.currentData()
-        if (not text and not self.images) or self.busy:
+        if (not text and not self.images) or self.busy or self.thread_loading:
             return
         if self.login_inflight:
             self.status.setText('正在等待授權完成，請稍後再發送。')
@@ -964,6 +1019,7 @@ class PetPanel(QDialog):
         self.effort.setEnabled(False)
         self.new_button.setEnabled(False)
         self.threads_button.setEnabled(False)
+        self.thread_refresh.setEnabled(False)
         self.choose_cwd.setEnabled(False)
         self.permission.setEnabled(False)
         self.login_button.setEnabled(False)
@@ -1070,6 +1126,8 @@ class PetPanel(QDialog):
         elif event in ('codex_threads_error', 'codex_thread_error'):
             self.thread_loading = False
             self.thread_reading = None
+            self.thread_refreshing = False
+            self._show_permission()
             if self.thread_dialog is not None:
                 self.thread_status.setText('對話查詢失敗：' + str(data))
                 self.thread_more.setText('重試')
@@ -1180,6 +1238,7 @@ class PetPanel(QDialog):
         self.effort.setEnabled(True)
         self.new_button.setEnabled(True)
         self.threads_button.setEnabled(True)
+        self._show_permission()
         self.choose_cwd.setEnabled(True)
         self.permission.setEnabled(True)
         self.login_button.setEnabled(not self.login_inflight)

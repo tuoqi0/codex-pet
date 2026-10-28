@@ -30,6 +30,15 @@ IMAGE_FORMATS = {'PNG': ('image/png', '.png'), 'JPEG': ('image/jpeg', '.jpg'),
                  'WEBP': ('image/webp', '.webp'), 'GIF': ('image/gif', '.gif')}
 
 STOP_TIMEOUT_SECONDS = 8
+MAX_HISTORY_PAGES = 100
+
+
+class RpcError(RuntimeError):
+    """An app-server JSON-RPC error, retaining the server error code."""
+
+    def __init__(self, error):
+        super().__init__(error.get('message', 'Codex 请求失败'))
+        self.code = error.get('code')
 
 
 class CancelledBeforeTurn(Exception):
@@ -148,7 +157,7 @@ class AppServer:
         self.mode = None
         threading.Thread(target=self._read, daemon=True).start()
         try:
-            self.request('initialize', {'clientInfo': {'name': 'codex_pet', 'title': 'Codex Pet', 'version': '2.7.0'}, 'capabilities': {'experimentalApi': True}})
+            self.request('initialize', {'clientInfo': {'name': 'codex_pet', 'title': 'Codex Pet', 'version': '2.8.0'}, 'capabilities': {'experimentalApi': True}})
             self.write({'method': 'initialized', 'params': {}})
         except Exception:
             self.close()
@@ -200,7 +209,7 @@ class AppServer:
                 raise RuntimeError('Codex App Server 已退出。')
             if event.get('id') == request_id and 'method' not in event:
                 if 'error' in event:
-                    raise RuntimeError(event['error'].get('message', 'Codex 请求失败'))
+                    raise RpcError(event['error'])
                 return event.get('result', {})
             self.handle(event)
 
@@ -485,7 +494,37 @@ class Backend:
                 account = server.request('account/read', {'refreshToken': False}).get('account')
                 if not account or account.get('type') != 'chatgpt':
                     raise RuntimeError('Codex 未以 ChatGPT 账户登录；不会使用 API key。')
-                result = server.request('thread/read', {'threadId': thread_id, 'includeTurns': True})
+                result = server.request('thread/read', {'threadId': thread_id})
+                thread = result.get('thread')
+                if not isinstance(thread, dict) or thread.get('id') != thread_id:
+                    raise RuntimeError('无法确认所选 Codex 对话。')
+                turns, cursor, seen = [], None, set()
+                while True:
+                    params = {'threadId': thread_id, 'limit': 50,
+                              'sortDirection': 'asc', 'itemsView': 'full'}
+                    if cursor:
+                        params['cursor'] = cursor
+                    try:
+                        page = server.request('thread/turns/list', params)
+                    except RpcError as exc:
+                        if exc.code != -32601 or cursor:
+                            raise
+                        # Older app-server builds predate thread/turns/list.
+                        result = server.request('thread/read', {'threadId': thread_id, 'includeTurns': True})
+                        break
+                    data = page.get('data')
+                    if not isinstance(data, list):
+                        raise RuntimeError('Codex 历史格式无效。')
+                    turns.extend(data)
+                    cursor = page.get('nextCursor')
+                    if not cursor:
+                        thread['turns'] = turns
+                        break
+                    if not isinstance(cursor, str) or cursor in seen:
+                        raise RuntimeError('Codex 历史分页游标无效。')
+                    seen.add(cursor)
+                    if len(seen) >= MAX_HISTORY_PAGES:
+                        raise RuntimeError('此 Codex 对话过长，超过桌宠一次读取上限；原有显示和草稿未更改。')
             finally:
                 server.close()
             self.emit('codex_thread', result)

@@ -12,7 +12,7 @@ they are not independently rigged. Patrol moves the figure as a whole.
 Build with `./build-deb.sh`. Install the resulting package with:
 
 ```sh
-sudo apt install ./dist/codex-pet_2.7.0_all.deb
+sudo apt install ./dist/codex-pet_2.8.0_all.deb
 ```
 
 Quit an already-running older version through its right-click menu before
@@ -85,7 +85,8 @@ treated as a verified match. The panel lists models returned for each route and
 offers supported reasoning levels for Codex task models.
 
 In task mode, **選擇 Codex 對話** lists local Codex sessions on request. Select a
-session to read its messages, then explicitly choose the permissions for the
+session to read its messages; use **刷新已選對話** to fetch later messages without
+sending a task or replacing an unsent draft. Explicitly choose permissions for the
 next turn before continuing. The app checks the returned sandbox and approval
 policy; it does not infer the old session's permissions. Avoid running two
 clients on the same session at once. ChatGPT authorization does not grant access

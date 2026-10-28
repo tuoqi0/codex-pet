@@ -1,7 +1,7 @@
 """Readable, non-modal messages anchored near a desktop companion."""
 import math
 
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import QPoint, QRect, Qt, QTimer
 from PyQt5.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel,
                              QPushButton, QScrollArea, QVBoxLayout, QWidget)
 
@@ -88,7 +88,33 @@ class SpeechBubble(QWidget):
         above = rect.top() - self.height() - 10
         y = above if above >= area.top() else rect.bottom() + 10
         y = max(area.top(), min(y, area.bottom() - self.height() + 1))
-        self.move(x, y)
+        # The companions can speak in quick succession. Prefer a nearby
+        # position that leaves all currently visible speech readable.
+        visible = [item for item in QApplication.topLevelWidgets()
+                   if isinstance(item, SpeechBubble) and item is not self
+                   and item.isVisible() and item.frameGeometry().intersects(area)]
+        obstacles = [item.frameGeometry() for item in visible]
+        xs = {x, area.left(), area.right() - self.width() + 1}
+        ys = {y, area.top(), area.bottom() - self.height() + 1}
+        for obstacle in obstacles:
+            xs.update((obstacle.left() - self.width() - 4, obstacle.right() + 5))
+            ys.update((obstacle.top() - self.height() - 4, obstacle.bottom() + 5))
+        xs = {max(area.left(), min(v, area.right() - self.width() + 1)) for v in xs}
+        ys = {max(area.top(), min(v, area.bottom() - self.height() + 1)) for v in ys}
+
+        def score(point):
+            candidate = QRect(point, self.size())
+            overlap = sum(r.width() * r.height() for r in
+                          (candidate.intersected(obstacle) for obstacle in obstacles))
+            return overlap, abs(point.x() - x) + abs(point.y() - y)
+
+        position = min((QPoint(px, py) for px in xs for py in ys), key=score)
+        # If the screen physically cannot hold both bubbles, keep the newest
+        # message legible instead of covering the text of either message.
+        for item in visible:
+            if QRect(position, self.size()).intersects(item.frameGeometry()):
+                item.hide()
+        self.move(position)
         if duration_ms is None:
             duration_ms = max(self.MIN_DURATION_MS, min(self.MAX_DURATION_MS,
                               math.ceil(len(text) / self.READING_CHARS_PER_SECOND * 1000)))

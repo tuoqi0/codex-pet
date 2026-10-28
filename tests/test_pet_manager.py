@@ -12,7 +12,8 @@ from unittest import mock
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from PIL import Image
-from PyQt5.QtCore import QPoint, Qt
+from PyQt5.QtCore import QPoint, QPointF, Qt
+from PyQt5.QtGui import QContextMenuEvent, QMouseEvent
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication
 import codex_pet
@@ -165,6 +166,76 @@ class ManagerIntegrationTests(unittest.TestCase):
             manager.on_user_greet(manager.qpet)
             delayed.call_args.args[1]()
             self.assertEqual(manager.dragon.behavior.message, '我也在這裡陪你。')
+
+    def test_wayland_explicit_greetings_can_reply_but_automatic_chat_is_disabled(self):
+        manager = self.manager
+        manager.dragon.wayland = manager.qpet.wayland = True
+        manager.dragon.move(0, 0)
+        manager.qpet.move(10000, 10000)  # coordinates are meaningless on Wayland
+        self.assertFalse(manager.interaction_ready())
+        with mock.patch.object(codex_pet.QTimer, 'singleShot') as delayed:
+            manager.dragon.greet()
+            delayed.assert_called_once()
+            delayed.call_args.args[1]()
+            self.assertEqual(manager.qpet.message, '我也在，和你一起！')
+        manager.qpet.player.play('idle')
+        manager.dragon.behavior.reaction_until = 0
+        with mock.patch.object(codex_pet.QTimer, 'singleShot') as delayed:
+            manager.qpet.greet()
+            delayed.assert_called_once()
+            delayed.call_args.args[1]()
+            self.assertEqual(manager.dragon.behavior.message, '我也在這裡陪你。')
+        self.assertFalse(manager.interaction_ready())
+
+    def test_context_menu_greetings_use_shared_greeting_flow(self):
+        manager = self.manager
+        manager.dragon.move(20, 100)
+        manager.qpet.move(260, 100)
+        class TestMenu(codex_pet.QMenu):
+            def exec_(self, _position):
+                next(action for action in self.actions() if action.text() == '打招呼').trigger()
+
+        for source in (manager.dragon, manager.qpet):
+            manager.dragon.behavior.reaction_until = 0
+            manager.qpet.player.play('idle')
+            manager.dragon.speech.hide()
+            manager.qpet.speech.hide()
+            with self.subTest(source=source.windowTitle()), \
+                    mock.patch.object(codex_pet.QTimer, 'singleShot') as delayed, \
+                    mock.patch.object(codex_pet, 'QMenu', TestMenu):
+                source.contextMenuEvent(QContextMenuEvent(QContextMenuEvent.Mouse, QPoint(10, 10)))
+                self.assertTrue(source.speech.isVisible())
+                delayed.assert_called_once()
+                delayed.call_args.args[1]()
+                other = manager.qpet if source is manager.dragon else manager.dragon
+                self.assertTrue(other.speech.isVisible())
+                self.assertFalse(source.speech.geometry().intersects(other.speech.geometry()))
+
+    def test_dragging_hides_old_bubble_for_each_pet(self):
+        for pet in (self.manager.dragon, self.manager.qpet):
+            with self.subTest(pet=pet.windowTitle()):
+                pet.speech.show_message('一条提醒', pet)
+                local = QPoint(30, 30)
+                QTest.mousePress(pet, Qt.LeftButton, pos=local)
+                moved = local + QPoint(QApplication.startDragDistance() + 10, 0)
+                event = QMouseEvent(QMouseEvent.MouseMove, QPointF(moved),
+                                    QPointF(pet.mapToGlobal(moved)), Qt.NoButton,
+                                    Qt.LeftButton, Qt.NoModifier)
+                QApplication.sendEvent(pet, event)
+                self.assertTrue(pet.drag_moved)
+                self.assertFalse(pet.speech.isVisible())
+                QTest.mouseRelease(pet, Qt.LeftButton, pos=moved)
+
+    def test_automatic_conversation_bubbles_do_not_overlap(self):
+        manager = self.manager
+        manager.next_interaction = 0
+        with mock.patch.object(codex_pet.QTimer, 'singleShot') as delayed:
+            manager.maybe_interact()
+            delayed.assert_called_once()
+            delayed.call_args.args[1]()
+        self.assertTrue(manager.dragon.speech.isVisible())
+        self.assertTrue(manager.qpet.speech.isVisible())
+        self.assertFalse(manager.dragon.speech.geometry().intersects(manager.qpet.speech.geometry()))
 
     def test_click_reply_still_works_when_automatic_companionship_is_suppressed(self):
         manager = self.manager

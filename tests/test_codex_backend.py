@@ -333,6 +333,7 @@ for line in sys.stdin:
                 if method == 'account/read': return {'account': {'type': 'chatgpt'}}
                 if method == 'thread/list': return {'data': [{'id': 'old'}], 'nextCursor': None}
                 if method == 'thread/read': return {'thread': {'id': 'old', 'cwd': '/not-the-project', 'turns': []}}
+                if method == 'thread/turns/list': return {'data': [], 'nextCursor': None}
                 raise AssertionError('must not resume an unrelated session')
             def close(self): pass
         b = backend.Backend(emit, auth=FakeAuth())
@@ -343,12 +344,71 @@ for line in sys.stdin:
             ready.clear()
             b.codex_thread('old')
             self.assertTrue(ready.wait(2))
-            self.assertEqual(requests_seen[-1], ('thread/read', {'threadId': 'old', 'includeTurns': True}))
+            self.assertEqual(requests_seen[-1], ('thread/turns/list', {'threadId': 'old', 'limit': 50, 'sortDirection': 'asc', 'itemsView': 'full'}))
             with self.assertRaisesRegex(RuntimeError, '工作目录'):
                 b._agent('task', 'do something', directory, thread_id='old', task_sandbox='read-only')
             self.assertNotIn('thread/resume', [method for method, _ in requests_seen])
         b.send('chat', 'hi', None, thread_id='old')
         self.assertIn('只能在任务模式', events[-1][1])
+
+    def test_history_pages_and_legacy_fallback(self):
+        events, ready, calls = [], threading.Event(), []
+        def emit(event, data):
+            events.append((event, data))
+            if event in ('codex_thread', 'codex_thread_error'): ready.set()
+        class Server:
+            fallback = False
+            def __init__(self, *args, **kwargs): pass
+            def request(self, method, params):
+                calls.append((method, params))
+                if method == 'account/read': return {'account': {'type': 'chatgpt'}}
+                if method == 'thread/read':
+                    return {'thread': {'id': 'chosen', 'cwd': '/tmp', 'turns': [{'id': 'legacy'}] if params.get('includeTurns') else []}}
+                if method == 'thread/turns/list':
+                    if self.fallback: raise backend.RpcError({'code': -32601, 'message': 'unknown method'})
+                    return {'data': [{'id': 'two' if params.get('cursor') else 'one'}],
+                            'nextCursor': None if params.get('cursor') else 'next'}
+                raise AssertionError(method)
+            def close(self): pass
+        b = backend.Backend(emit, auth=FakeAuth())
+        with mock.patch.object(backend, 'AppServer', Server):
+            b.codex_thread('chosen')
+            self.assertTrue(ready.wait(2))
+            self.assertEqual([t['id'] for t in events[-1][1]['thread']['turns']], ['one', 'two'])
+            self.assertEqual([p.get('cursor') for m, p in calls if m == 'thread/turns/list'], [None, 'next'])
+            ready.clear(); calls.clear(); Server.fallback = True
+            b.codex_thread('chosen')
+            self.assertTrue(ready.wait(2))
+            self.assertEqual(events[-1][1]['thread']['turns'][0]['id'], 'legacy')
+            self.assertEqual(calls[-1], ('thread/read', {'threadId': 'chosen', 'includeTurns': True}))
+        self.assertFalse(any(m in ('thread/resume', 'turn/start') for m, p in calls))
+
+    def test_history_bad_cursor_and_non_method_error_are_reported(self):
+        events, ready, calls = [], threading.Event(), []
+        def emit(event, data):
+            events.append((event, data))
+            if event in ('codex_thread', 'codex_thread_error'): ready.set()
+        class Server:
+            fail = False
+            def __init__(self, *args, **kwargs): pass
+            def request(self, method, params):
+                calls.append((method, params))
+                if method == 'account/read': return {'account': {'type': 'chatgpt'}}
+                if method == 'thread/read': return {'thread': {'id': 'chosen', 'cwd': '/tmp'}}
+                if method == 'thread/turns/list':
+                    if self.fail: raise backend.RpcError({'code': -32602, 'message': 'denied'})
+                    return {'data': [], 'nextCursor': 'same'}
+                raise AssertionError(method)
+            def close(self): pass
+        b = backend.Backend(emit, auth=FakeAuth())
+        with mock.patch.object(backend, 'AppServer', Server):
+            b.codex_thread('chosen'); self.assertTrue(ready.wait(2))
+            self.assertEqual(events[-1][0], 'codex_thread_error')
+            self.assertIn('游标', events[-1][1])
+            ready.clear(); calls.clear(); Server.fail = True
+            b.codex_thread('chosen'); self.assertTrue(ready.wait(2))
+            self.assertEqual(events[-1], ('codex_thread_error', 'denied'))
+            self.assertFalse(any(p.get('includeTurns') for m, p in calls))
 
     def test_selected_codex_session_resumes_with_selected_model_and_effort(self):
         class Server:

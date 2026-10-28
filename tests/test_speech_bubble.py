@@ -3,10 +3,11 @@ import os
 from pathlib import Path
 import sys
 import unittest
+from unittest import mock
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QRect, Qt
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QWidget
 from speech_bubble import SpeechBubble
@@ -65,6 +66,42 @@ class SpeechBubbleTests(unittest.TestCase):
         self.assertEqual(self.bubble.message.text(), '第二条')
         QTest.qWait(150)
         self.assertFalse(self.bubble.isVisible())
+
+    def test_two_messages_avoid_each_other_at_screen_edges(self):
+        other = SpeechBubble()
+        second_pet = QWidget(None, Qt.Tool)
+        second_pet.resize(120, 100)
+        second_pet.move(190, 80)
+        second_pet.show()
+        try:
+            area = QRect(0, 0, 320, 180)
+            screen = mock.Mock()
+            screen.availableGeometry.return_value = area
+            with mock.patch.object(QApplication, 'screenAt', return_value=screen):
+                self.bubble.show_message('第一只说你好', self.pet)
+                other.show_message('第二只回应', second_pet)
+            self.assertTrue(self.bubble.isVisible())
+            self.assertTrue(other.isVisible())
+            self.assertTrue(area.contains(self.bubble.geometry()))
+            self.assertTrue(area.contains(other.geometry()))
+            self.assertFalse(self.bubble.geometry().intersects(other.geometry()))
+        finally:
+            other.close()
+            second_pet.close()
+
+    def test_when_screen_cannot_fit_both_messages_newest_remains_readable(self):
+        other = SpeechBubble()
+        try:
+            screen = mock.Mock()
+            screen.availableGeometry.return_value = QRect(0, 0, 200, 80)
+            with mock.patch.object(QApplication, 'screenAt', return_value=screen):
+                self.bubble.show_message('第一条', self.pet)
+                other.show_message('第二条', self.pet)
+            self.assertFalse(self.bubble.isVisible())
+            self.assertTrue(other.isVisible())
+            self.assertEqual(other.message.text(), '第二条')
+        finally:
+            other.close()
 
 
 if __name__ == '__main__':

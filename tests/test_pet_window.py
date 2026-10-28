@@ -98,7 +98,13 @@ class WindowTests(unittest.TestCase):
         self.assertGreater(differences(.25, .22, .47, .50), 20)
         self.assertGreater(differences(.73, .22, .92, .50), 20)
         self.assertGreater(differences(.72, .53, .92, .84), 20)
-        self.assertEqual(differences(.40, .12, .60, .94), 0)
+        # The old .40–.60 full-height rectangle included the left wing tip.
+        # Check the face, body and knees independently, leaving that wing free
+        # to move. Default-window pixel stability is also checked separately in
+        # test_dragon_motion against every motion phase.
+        self.assertEqual(differences(.53, .14, .64, .30), 0)
+        self.assertEqual(differences(.52, .30, .65, .65), 0)
+        self.assertEqual(differences(.35, .45, .43, .52), 0)
         # A fully drawn centre remains opaque across every motion frame: no
         # global alpha fade or overlay that would make the face flicker.
         for frame in frames:

@@ -52,6 +52,87 @@ class PanelTests(unittest.TestCase):
         self.panel.deleteLater()
         self.app.processEvents()
 
+    def test_refresh_selected_thread_preserves_draft_and_permissions(self):
+        self.panel.mode.setCurrentIndex(2)
+        self.panel.cwd = '/tmp'
+        self.panel.selected_thread = 'chosen'
+        self.panel._show_permission()
+        self.panel.permission.setCurrentIndex(1)
+        permission = self.panel.permission.currentData()
+        self.panel.prompt.setPlainText('尚未發送的草稿')
+        self.panel.images = ['/tmp/pending.png']
+        self.panel.backend.calls.clear()
+        self.panel._refresh_thread()
+        self.assertEqual(self.panel.backend.calls, [('codex_thread', 'chosen')])
+        self.panel._send()
+        self.assertEqual(self.panel.backend.calls, [('codex_thread', 'chosen')])
+        self.panel.bridge.received.emit('codex_thread', {'thread': {'id': 'chosen', 'cwd': '/tmp', 'turns': [
+            {'items': [{'type': 'agentMessage', 'text': '其他客戶端新消息'}]}]}})
+        self.assertIn('其他客戶端新消息', self.panel.transcripts['task'].toPlainText())
+        self.assertEqual(self.panel.prompt.toPlainText(), '尚未發送的草稿')
+        self.assertEqual(self.panel.images, ['/tmp/pending.png'])
+        self.assertEqual(self.panel.permission.currentData(), permission)
+        self.assertFalse(self.panel.thread_loading)
+        self.panel._refresh_thread()
+        self.panel.bridge.received.emit('codex_thread_error', '讀取失敗')
+        self.assertFalse(self.panel.thread_loading)
+        self.assertIn('讀取失敗', self.panel.status.text())
+        self.assertIn('其他客戶端新消息', self.panel.transcripts['task'].toPlainText())
+
+    def test_refresh_while_busy_or_stale_cannot_replace_history(self):
+        self.panel.mode.setCurrentIndex(2)
+        self.panel.cwd = '/tmp'
+        self.panel.selected_thread = 'chosen'
+        self.panel._show_permission()
+        self.panel.transcripts['task'].add_message('assistant', '原有內容')
+        self.panel.backend.calls.clear()
+        self.panel.busy = True
+        self.panel._refresh_thread()
+        self.assertFalse(self.panel.backend.calls)
+        self.panel.busy = False
+        self.panel._refresh_thread()
+        self.panel.selected_thread = 'other'
+        self.panel.bridge.received.emit('codex_thread', {'thread': {'id': 'chosen', 'cwd': '/tmp', 'turns': [
+            {'items': [{'type': 'agentMessage', 'text': '不應顯示'}]}]}})
+        self.assertIn('原有內容', self.panel.transcripts['task'].toPlainText())
+        self.assertNotIn('不應顯示', self.panel.transcripts['task'].toPlainText())
+        self.assertIn('刷新失敗', self.panel.status.text())
+
+    def test_refresh_malformed_history_and_mode_switch_preserve_state(self):
+        self.panel.mode.setCurrentIndex(2)
+        self.panel.cwd = '/tmp'
+        self.panel.selected_thread = 'chosen'
+        self.panel._show_models('task')
+        self.panel.model.setCurrentIndex(self.panel.model.findData({'id': 'model', 'name': 'Model',
+            'efforts': ['low', 'high'], 'default_effort': 'high'}))
+        selected_model = self.panel.model_choice.get('task')
+        self.assertEqual(selected_model, 'model')
+        self.panel.permission.setCurrentIndex(1)
+        permission = self.panel.permission.currentData()
+        self.panel.prompt.setPlainText('保留草稿')
+        self.panel.transcripts['task'].add_message('assistant', '原有內容')
+        self.panel._refresh_thread()
+        self.panel.mode.setCurrentIndex(0)
+        self.panel._choose_cwd()
+        self.assertEqual(self.panel.cwd, '/tmp')
+        self.panel._refresh_thread()
+        self.assertEqual(len([c for c in self.panel.backend.calls if c[0] == 'codex_thread']), 1)
+        self.panel.bridge.received.emit('codex_thread', {'thread': {'id': 'chosen', 'cwd': '/tmp',
+                                                                  'turns': [{'items': None}]}})
+        self.assertIn('原有內容', self.panel.transcripts['task'].toPlainText())
+        self.assertEqual(self.panel.prompt.toPlainText(), '保留草稿')
+        self.panel.mode.setCurrentIndex(2)
+        self.assertEqual(self.panel.permission.currentData(), permission)
+        self.assertEqual(self.panel.model_choice.get('task'), selected_model)
+        self.assertFalse(self.panel.thread_loading)
+        self.panel._refresh_thread()
+        self.panel.bridge.received.emit('codex_thread', {'thread': {'id': 'chosen', 'cwd': '/tmp',
+            'turns': [{'items': [{'type': 'agentMessage', 'text': '刷新後的內容'}]}]}})
+        self.assertIn('刷新後的內容', self.panel.transcripts['task'].toPlainText())
+        self.assertEqual(self.panel.prompt.toPlainText(), '保留草稿')
+        self.assertEqual(self.panel.permission.currentData(), permission)
+        self.assertEqual(self.panel.model_choice.get('task'), selected_model)
+
     def test_chat_progress_and_error_completion(self):
         self.panel.prompt.setPlainText('你好')
         self.panel._send()
